@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Render the rotating companion cube (ASCII, no UI chrome) to docs/companion.gif.
 
-Runs the built ascii3D.exe in --snapshot mode at several angles and stitches the
-frames into an animated GIF. Requires Pillow and a build at build/ascii3D.exe.
+Runs the built ascii3D.exe in --snapshot mode over exactly one full turn and
+stitches the frames into a seamlessly looping animated GIF with a transparent
+background. Requires Pillow and a build at build/ascii3D.exe.
 
 Usage:  python tools/make_preview_gif.py
 """
@@ -17,10 +18,11 @@ EXE = os.path.join(ROOT, "build", "ascii3D.exe")
 OUT = os.path.join(ROOT, "docs", "companion.gif")
 FONT = r"C:\Windows\Fonts\consola.ttf"
 
-FRAMES = 36          # full turn
+FRAMES = 36                 # exactly one full turn: 360 / 36 = 10 deg per frame
+STEP = 360.0 / FRAMES       # frame N is at N*STEP; frame 0 == frame FRAMES (not stored)
+DURATION = 80               # ms per frame
 FONT_SIZE = 13
-FG = (40, 230, 110)
-BG = (0, 0, 0)
+FG = (46, 160, 67)          # green foreground (readable on light and dark)
 
 
 def snapshot(angle):
@@ -29,12 +31,23 @@ def snapshot(angle):
     return [ln.rstrip() for ln in r.stdout.splitlines()]
 
 
+def to_transparent_p(img_rgba):
+    """Convert an RGBA frame to a palettised GIF frame with 1-bit transparency."""
+    r, g, b, a = img_rgba.split()
+    opaque = a.point(lambda v: 255 if v >= 128 else 0)      # 1-bit alpha
+    rgb = Image.new("RGB", img_rgba.size, FG)               # background uses FG colour
+    rgb.paste(Image.merge("RGB", (r, g, b)), mask=opaque)   # glyphs where opaque
+    pal = rgb.convert("P", palette=Image.ADAPTIVE, colors=255)
+    pal.paste(255, opaque.point(lambda v: 255 if v == 0 else 0))  # index 255 = transparent
+    return pal
+
+
 def main():
-    frames = [snapshot(i * (360.0 / FRAMES)) for i in range(FRAMES)]
+    frames = [snapshot(i * STEP) for i in range(FRAMES)]
     rows = len(frames[0])
     cols = max(len(ln) for fr in frames for ln in fr)
 
-    # union bounding box of non-space cells (fixed crop, so the cube doesn't jump)
+    # fixed crop = union bounding box of non-space cells, so the cube doesn't jump
     minr, maxr, minc, maxc = rows, -1, cols, -1
     for fr in frames:
         for r, ln in enumerate(fr):
@@ -54,20 +67,21 @@ def main():
 
     images = []
     for fr in frames:
-        img = Image.new("RGB", img_size, BG)
+        img = Image.new("RGBA", img_size, (0, 0, 0, 0))     # transparent background
         d = ImageDraw.Draw(img)
         for r in range(minr, maxr + 1):
             ln = fr[r] if r < len(fr) else ""
             for c in range(minc, maxc + 1):
                 ch = ln[c] if c < len(ln) else " "
                 if ch != " ":
-                    d.text(((c - minc) * cw, (r - minr) * lh), ch, font=font, fill=FG)
-        images.append(img)
+                    d.text(((c - minc) * cw, (r - minr) * lh), ch, font=font, fill=FG + (255,))
+        images.append(to_transparent_p(img))
 
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     images[0].save(OUT, save_all=True, append_images=images[1:],
-                   duration=80, loop=0, optimize=True, disposal=2)
-    print("wrote %s  (%d frames, %dx%d px, %.0f KB)"
+                   duration=DURATION, loop=0, transparency=255,
+                   disposal=2, optimize=False)
+    print("wrote %s  (%d frames, %dx%d px, %.0f KB, transparent)"
           % (OUT, len(images), img_size[0], img_size[1], os.path.getsize(OUT) / 1024.0))
 
 
