@@ -4,35 +4,13 @@ A tiny native Windows x64 console application that renders shaded **3D solids
 as animated ASCII art**. No runtime, no third-party libraries, just one small
 native `.exe`.
 
-```
-                                                       :%-  :
-                                                       ~###Ooo=   *O
-                                                 *#O.  ~O#Oooo** OOO-  -%~;
-                                                +OoooOOOOo******oOoOO o#**o.
-                                          :    #oooo**OOOooo****ooo*OOoooooo
-                                         -**oO:OOOOOO##%ooooooooooo+Ooooooo:
-                                         ooooO*O###@@@@@####OOOO###oOOOOOoo ~-:
-                                      +o~,oooO%%#%%@@@@@OO%%%OOOoooOOOOOOOOO##O *~:
-                                    ~ ##Oo##%%@%#%%%@@@@Oo+**oooooOOOOOOOoO#####**o
-                               ~   +OOOOO%@@%%%%%#@@@@@#Ooo-ooooooOOOOOOO#OOOOoooo+
-          ~                   oooOO*#@@@@%%OOOOOoO@@@@@oooo*****ooOOOOOOO###o+++*o*#o
-         ~ - :.               ,o*+o%%####Oo**ooOOo%###Oooo+***oooooooOO####o*****oOoo~
-          ~:o~:-~          **- ~o####Oo*****--...#####ooo=+**oooooooooOOo*+#OOooOO#%%@@O;
-            =Ooo=o-,       +##%##%#***-;;,     -OOOOO*++:================-+####+++o=+ooooOo;
-              ;;*+o##@%########*+~:           :OOOOo++*#oo=               ;oOOO
-                      ,;;;,                   -OOO**=##o*,                 oOO
-                                              OOO*+.%%%o                   ooo
-                                              OOO+;-%%#*:                  ooo
-                                              @@#o                        ~#O=~
-                                             %%%Oo.                       ~##o
-                                             :--~;~
-```
+![Rotating companion cube](docs/companion.gif)
 
 ## Download
 
 Prebuilt Windows x64 binaries are available on the
 [releases page](https://github.com/Grownz/3DASCIIRotator/releases/latest).
-Latest: [ascii3d-0.1.0-win-x64.exe](https://github.com/Grownz/3DASCIIRotator/releases/download/v0.1.0/ascii3d-0.1.0-win-x64.exe).
+Latest: [ascii3D.exe](https://github.com/Grownz/3DASCIIRotator/releases/download/v0.1.0/ascii3D.exe).
 No installer and no runtime are required.
 
 ## Features
@@ -82,12 +60,12 @@ build.bat
 ```
 
 This locates your Visual Studio installation, initializes the MSVC
-environment and produces `build\ascii3d.exe`.
+environment and produces `build\ascii3D.exe`.
 
 ## Usage
 
 ```bat
-build\ascii3d.exe -s cube
+build\ascii3D.exe -s cube
 ```
 
 ### Options
@@ -106,21 +84,21 @@ build\ascii3d.exe -s cube
 ### Examples
 
 ```bat
-build\ascii3d.exe -s sphere
-build\ascii3d.exe --shape diamond
-build\ascii3d.exe -s cylinder --angle 30
-build\ascii3d.exe -s cube --tilt 45
-build\ascii3d.exe -s stego
-build\ascii3d.exe -s f1 --tilt 20
-build\ascii3d.exe -s companion
-build\ascii3d.exe -s maus
-build\ascii3d.exe -s fish
-build\ascii3d.exe -s kebab
-build\ascii3d.exe -s berlin --tilt 15
-build\ascii3d.exe -s china
-build\ascii3d.exe --snapshot -s cube > frame.txt
-build\ascii3d.exe --snapshot -s stego --angle 90
-build\ascii3d.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
+build\ascii3D.exe -s sphere
+build\ascii3D.exe --shape diamond
+build\ascii3D.exe -s cylinder --angle 30
+build\ascii3D.exe -s cube --tilt 45
+build\ascii3D.exe -s stego
+build\ascii3D.exe -s f1 --tilt 20
+build\ascii3D.exe -s companion
+build\ascii3D.exe -s maus
+build\ascii3D.exe -s fish
+build\ascii3D.exe -s kebab
+build\ascii3D.exe -s berlin --tilt 15
+build\ascii3D.exe -s china
+build\ascii3D.exe --snapshot -s cube > frame.txt
+build\ascii3D.exe --snapshot -s stego --angle 90
+build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 ```
 
 ## Controls
@@ -181,8 +159,10 @@ settles into a shallow debris layer on the floor the object was resting on.
   src/kebab_model.h     embedded kebab mesh (generated)
   src/berlin_model.h    embedded Brandenburg Gate mesh (generated)
   src/china_model.h     embedded "Tank Man" scene mesh (generated)
+  docs/companion.gif    preview animation (generated)
   tools/make_stego_model.py    regenerates src/stego_model.h
   tools/make_shape_models.py   regenerates the other model headers
+  tools/make_preview_gif.py    regenerates docs/companion.gif
   build.bat             MSVC build script
   readme.md             this file
   changelog.md          version history

@@ -751,7 +751,7 @@ static void print_help(void) {
         "%s %s\n\n"
         "Render a shaded 3D shape as animated ASCII art in the console.\n\n"
         "Usage:\n"
-        "  ascii3d [options]\n\n"
+        "  ascii3D [options]\n\n"
         "Options:\n"
         "  -s, --shape <name>   Shape to render: cube | cylinder | diamond |\n"
         "                       sphere | stego | f1 | companion | maus |\n"
@@ -959,7 +959,7 @@ int main(int argc, char **argv) {
     if (!is_console) {
         fprintf(stderr,
                 "error: this application needs an interactive console.\n"
-                "       For a one-off frame use: ascii3d --snapshot -s cube\n");
+                "       For a one-off frame use: ascii3D --snapshot -s cube\n");
         return 1;
     }
 

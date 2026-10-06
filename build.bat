@@ -1,12 +1,12 @@
 @echo off
 REM ---------------------------------------------------------------------------
 REM Build script for 3D ASCII Rotator (Windows x64, MSVC).
-REM Produces build\ascii3d.exe.  Requires Visual Studio / Build Tools with the
+REM Produces build\ascii3D.exe.  Requires Visual Studio / Build Tools with the
 REM MSVC C compiler and the Windows SDK.
 REM ---------------------------------------------------------------------------
 setlocal
 
-set "APP=ascii3d"
+set "APP=ascii3D"
 
 REM Locate a Visual Studio installation that has the C++ build tools.
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
