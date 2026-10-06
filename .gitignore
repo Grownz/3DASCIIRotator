@@ -1,0 +1,17 @@
+# Build output
+build/
+*.obj
+*.exe
+*.pdb
+*.ilk
+
+# Source model (downloaded on demand by tools/make_stego_model.py)
+tools/stegosaurus.glb
+
+# Downloaded source models / kits
+tools/models/
+
+# Editor
+.vs/
+.vscode/
+*.user
