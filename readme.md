@@ -5,20 +5,35 @@ as animated ASCII art**. No runtime, no third-party libraries, just one small
 native `.exe`.
 
 ```
-                            %@@@@@@@@@@%#
-                        #@@@@@@@@@@@@@@@@@@=
-                     %@@@@@@@@@@@@@@@@@@@@@@@@%
-                   @@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
-                 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                =@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-               #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-               .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*
-                 %@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                   @@@@@@@@@@@@@@@@@@@@@@@@@@@@@%
-                      @@@@@@@@@@@@@@@@@@@@@@@@#
-                          *@@@@@@@@@@@@@@*
+                                                       :%-  :
+                                                       ~###Ooo=   *O
+                                                 *#O.  ~O#Oooo** OOO-  -%~;
+                                                +OoooOOOOo******oOoOO o#**o.
+                                          :    #oooo**OOOooo****ooo*OOoooooo
+                                         -**oO:OOOOOO##%ooooooooooo+Ooooooo:
+                                         ooooO*O###@@@@@####OOOO###oOOOOOoo ~-:
+                                      +o~,oooO%%#%%@@@@@OO%%%OOOoooOOOOOOOOO##O *~:
+                                    ~ ##Oo##%%@%#%%%@@@@Oo+**oooooOOOOOOOoO#####**o
+                               ~   +OOOOO%@@%%%%%#@@@@@#Ooo-ooooooOOOOOOO#OOOOoooo+
+          ~                   oooOO*#@@@@%%OOOOOoO@@@@@oooo*****ooOOOOOOO###o+++*o*#o
+         ~ - :.               ,o*+o%%####Oo**ooOOo%###Oooo+***oooooooOO####o*****oOoo~
+          ~:o~:-~          **- ~o####Oo*****--...#####ooo=+**oooooooooOOo*+#OOooOO#%%@@O;
+            =Ooo=o-,       +##%##%#***-;;,     -OOOOO*++:================-+####+++o=+ooooOo;
+              ;;*+o##@%########*+~:           :OOOOo++*#oo=               ;oOOO
+                      ,;;;,                   -OOO**=##o*,                 oOO
+                                              OOO*+.%%%o                   ooo
+                                              OOO+;-%%#*:                  ooo
+                                              @@#o                        ~#O=~
+                                             %%%Oo.                       ~##o
+                                             :--~;~
 ```
+
+## Download
+
+Prebuilt Windows x64 binaries are available on the
+[releases page](https://github.com/Grownz/3DASCIIRotator/releases/latest).
+Latest: [ascii3d-0.1.0-win-x64.exe](https://github.com/Grownz/3DASCIIRotator/releases/download/v0.1.0/ascii3d-0.1.0-win-x64.exe).
+No installer and no runtime are required.
 
 ## Features
 
@@ -231,4 +246,4 @@ Current version: **0.1.0**. See [changelog.md](changelog.md) for details.
 
 Released under the **MIT License**. See [LICENSE](LICENSE) for the full text.
 
-Copyright (c) 2026 3D ASCII Rotator contributors.
+Copyright (c) 2026 Grownz.
