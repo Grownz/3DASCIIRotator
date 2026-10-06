@@ -4,7 +4,9 @@ A tiny native Windows x64 console application that renders shaded **3D solids
 as animated ASCII art**. No runtime, no third-party libraries, just one small
 native `.exe`.
 
-![Rotating companion cube](docs/companion.gif)
+<p align="center">
+  <img src="docs/companion.gif" alt="Rotating companion cube">
+</p>
 
 ## Download
 
