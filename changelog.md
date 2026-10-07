@@ -4,6 +4,18 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.3] - 2026-10-08
+
+### Added
+- A shape-colour slider in the bottom third of the model list: a 256-colour
+  scale (black and the five darkest greys are skipped) that recolours the
+  shape's characters. `Left` / `Right` move it and the choice applies
+  immediately.
+- `Pos1` / `Home` toggles an FPS readout in the bottom-left corner.
+
+### Changed
+- The status/LOD message now hides itself five seconds after it was set.
+
 ## [0.2.2] - 2026-10-07
 
 ### Added

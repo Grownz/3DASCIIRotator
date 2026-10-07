@@ -38,6 +38,12 @@ Prebuilt Windows x64 binaries are on the
 - **Model list.** Press `Tab` for a scrollable list of every available
   shape/model on the right; pick with the arrow keys or the mouse wheel and
   load with `SPACE`/`ENTER`.
+- **Shape colour.** While the list is open, move the slider in its bottom third
+  with `Left` / `Right` to recolour the shape's characters from a 256-colour
+  scale (black and the five darkest greys are skipped so the art stays
+  readable); the choice applies immediately.
+- **FPS readout.** Press `Pos1` / `Home` to toggle a frames-per-second display
+  in the bottom-left corner.
 - **Always spinning.** The solid rotates around the vertical (z) axis at
   15 deg/s by default.
 - **Tiltable spin axis.** Press `Up` / `Down` to tip the spin axis away from or
@@ -122,6 +128,8 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 | `Space` | Switch to the next shape; while the model list is open, load the selected model. |
 | `Tab` | Toggle the model list on the right. While open, `Up`/`Down` or the mouse wheel move the selection, `Enter`/`Space` load it, and `Tab` closes it. |
 | `Page Up` / `Page Down` | Weaker / stronger LOD for meshes that were reduced (too many triangles). |
+| `Left` / `Right` | In the open model list: move the shape-colour slider (applied live). |
+| `Pos1` / `Home` | Toggle the FPS display in the bottom-left corner. |
 | `R` | Rescan the `models/` folder now. |
 | `q` | Quit (convenience alias for `ESC`). |
 
@@ -271,7 +279,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.2**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.3**. See [changelog.md](changelog.md) for details.
 
 ## Roadmap
 

@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.2
+ * 3D ASCII Rotator - version 0.2.3
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -23,6 +23,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <wchar.h>
 
@@ -41,7 +42,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.2"
+#define APP_VERSION "0.2.3"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -95,6 +96,56 @@ static int          g_menu_sel = 0;
 static int          g_menu_scroll = 0;
 static int          g_menu_start = 0;              /* --menu (snapshot preview) */
 static int          g_lod_arg = -1;                /* --lod level (snapshot) */
+
+/* --- status message (auto-hides), FPS HUD, shape colour, menu slider ----- */
+static int    g_show_fps = 0;
+static double g_fps = 0.0;
+static double g_msg_time = 0.0;                    /* seconds left to show msg */
+static int    g_fg_color = 7;                      /* ANSI colour of the shape */
+static int    g_color_sel = 0;                     /* index into COLORS[]      */
+static short *g_cc = NULL;                         /* per-cell colour override */
+static int    g_cc_cap = 0;
+static int    g_hud_len = 0, g_msg_len = 0, g_fps_len = 0, g_menu_x0 = -1, g_rows = 0;
+
+/* Usable 256-colour indices: everything except black (0) and the five
+ * darkest greys (232..236). */
+static int COLORS[300];
+static int COLOR_N = 0;
+
+static void colors_init(void) {
+    int i;
+    COLOR_N = 0;
+    for (i = 0; i < 256; ++i) {
+        if (i == 0) continue;                 /* black */
+        if (i >= 232 && i <= 236) continue;   /* five darkest greys */
+        COLORS[COLOR_N++] = i;
+    }
+}
+
+static void msg_setf(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnprintf(g_model_msg, sizeof(g_model_msg) - 1, fmt, ap);
+    va_end(ap);
+    g_model_msg[sizeof(g_model_msg) - 1] = '\0';
+    g_msg_time = 5.0;
+}
+
+static void cc_ensure(int n) {
+    if (n > g_cc_cap) {
+        short *p = (short *)realloc(g_cc, sizeof(short) * (size_t)n);
+        if (p) { g_cc = p; g_cc_cap = n; }
+    }
+}
+
+/* Is this character cell part of the UI (HUD / message / FPS / menu)? */
+static int is_ui_cell(int r, int c) {
+    if (r == 0) return c < g_hud_len;
+    if (r == 1 && c < g_msg_len) return 1;
+    if (g_show_fps && r == g_rows - 1 && c < g_fps_len) return 1;
+    if (g_menu_open && g_menu_x0 >= 0 && c >= g_menu_x0) return 1;
+    return 0;
+}
 
 /* ------------------------------------------------------------------ vectors */
 
@@ -755,23 +806,46 @@ static void draw_hud(char *grid, int cols, int rows) {
     n = (int)strlen(hud);
     if (n > cols) n = cols;
     for (i = 0; i < n; ++i) grid[i] = hud[i];
-    if (g_model_msg[0]) {                 /* show the last model notice on line 2 */
+    g_hud_len = n;
+
+    g_msg_len = 0;
+    if (g_model_msg[0]) {                 /* last message on line 2 */
         int len = (int)strlen(g_model_msg);
         if (len > cols) len = cols;
-        if (rows > 1) for (i = 0; i < len; ++i) grid[cols + i] = g_model_msg[i];
+        if (rows > 1) { for (i = 0; i < len; ++i) grid[cols + i] = g_model_msg[i]; g_msg_len = len; }
     }
-    (void)rows;
+
+    g_fps_len = 0;
+    if (g_show_fps) {                     /* FPS display, bottom-left */
+        char fb[32];
+        int len;
+        _snprintf(fb, sizeof(fb), "FPS: %d", (int)(g_fps + 0.5));
+        fb[sizeof(fb) - 1] = '\0';
+        len = (int)strlen(fb);
+        if (len > cols) len = cols;
+        for (i = 0; i < len; ++i) grid[(size_t)(rows - 1) * cols + i] = fb[i];
+        g_fps_len = len;
+    }
+    g_rows = rows;
 }
 
 /* Right-hand model list (Tab): about a quarter of the width, top to bottom. */
 static void draw_menu(char *grid, int cols, int rows) {
     int pw = cols / 4;
     int x0, listrows, i, r, c;
+    int b0, sw;
     if (pw < 12) pw = 12;
     if (pw > cols - 4) pw = cols - 4;
     if (pw < 4) return;
     x0 = cols - pw;
-    listrows = rows - 1;
+    g_menu_x0 = x0;
+
+    /* the bottom third of the panel holds the colour slider */
+    b0 = rows * 2 / 3;
+    if (b0 < 5) b0 = 5;
+    if (b0 > rows - 3) b0 = rows - 3;
+    if (b0 < 1) b0 = 1;
+    listrows = b0 - 1;
     if (listrows < 1) return;
 
     if (g_menu_sel >= g_item_count) g_menu_sel = g_item_count - 1;
@@ -806,7 +880,36 @@ static void draw_menu(char *grid, int cols, int rows) {
     if (g_menu_scroll > 0)
         grid[(size_t)1 * cols + (cols - 1)] = '^';
     if (g_menu_scroll + listrows < g_item_count)
-        grid[(size_t)(rows - 1) * cols + (cols - 1)] = 'v';
+        grid[(size_t)(b0 - 1) * cols + (cols - 1)] = 'v';
+
+    /* --- colour slider (bottom third): pick the shape colour live --------- */
+    sw = cols - x0 - 2;                        /* slider cells: x0+1 .. cols-2 */
+    if (sw >= 2) {
+        char lbl[48];
+        const char *t;
+        _snprintf(lbl, sizeof(lbl), " colour %d/%d  #%d ", g_color_sel + 1, COLOR_N,
+                  COLORS[g_color_sel]);
+        lbl[sizeof(lbl) - 1] = '\0';
+        t = lbl;
+        c = x0 + 1;
+        while (*t && c < cols - 1) grid[(size_t)b0 * cols + c++] = *t++;
+
+        for (i = 0; i < sw; ++i) {             /* gradient bar */
+            int p = (sw > 1) ? (int)((double)i * (COLOR_N - 1) / (sw - 1)) : 0;
+            size_t idx = (size_t)(b0 + 1) * cols + (x0 + 1 + i);
+            grid[idx] = '=';
+            if (g_cc) g_cc[idx] = (short)COLORS[p];
+        }
+        if (b0 + 2 < rows) {                   /* caret under the current value */
+            int pos = (sw > 1) ? (int)((double)g_color_sel * (sw - 1) / (COLOR_N - 1) + 0.5) : 0;
+            size_t idx;
+            if (pos < 0) pos = 0;
+            if (pos >= sw) pos = sw - 1;
+            idx = (size_t)(b0 + 2) * cols + (x0 + 1 + pos);
+            grid[idx] = '^';
+            if (g_cc) g_cc[idx] = (short)COLORS[g_color_sel];
+        }
+    }
 }
 
 /* --------------------------------------------------------------- particles
@@ -1141,8 +1244,7 @@ static MeshDef *make_mesh(RawMesh *rm, const ModelMeta *meta) {
             m->verts = out.verts;     m->tris = out.tris;
             m->nvert = out.nvert;     m->ntri = out.ntri;
             m->lod_level = lvl;
-            _snprintf(g_model_msg, sizeof(g_model_msg),
-                      "LOD: reduced to %d tris (PageUp/PageDown)", m->ntri);
+            msg_setf("LOD: reduced to %d tris (PageUp/PageDown)", m->ntri);
         } else {
             m->lod_level = 0;
         }
@@ -1159,7 +1261,7 @@ static void set_lod(MeshDef *m, int level) {
     if (level >= LOD_N) level = LOD_N - 1;
     if (!simplify_cluster(m->src_verts, m->src_nvert, m->src_tris, m->src_ntri,
                           lod_target(m->src_ntri, level), &out, err, sizeof(err))) {
-        _snprintf(g_model_msg, sizeof(g_model_msg), "LOD failed: %s", err);
+        msg_setf("LOD failed: %s", err);
         return;
     }
     free((void *)m->verts);
@@ -1169,14 +1271,12 @@ static void set_lod(MeshDef *m, int level) {
     m->lod_level = level;
     mesh_release(m);
     lru_touch(m);
-    _snprintf(g_model_msg, sizeof(g_model_msg),
-              "LOD %d/%d: %d triangles", level + 1, LOD_N, m->ntri);
+    msg_setf("LOD %d/%d: %d triangles", level + 1, LOD_N, m->ntri);
 }
 
 static void apply_lod(int delta) {
     if (!g_mesh || !g_mesh->src_tris) {
-        _snprintf(g_model_msg, sizeof(g_model_msg),
-                  "LOD: only for meshes reduced from too many triangles");
+        msg_setf("LOD: only for meshes reduced from too many triangles");
         return;
     }
     set_lod(g_mesh, g_mesh->lod_level + delta);
@@ -1238,7 +1338,7 @@ static MeshDef *model_load(int idx) {
     if (g_models[idx].mesh) return g_models[idx].mesh;
     m = load_model_mesh(g_models[idx].path, g_models[idx].stem, tmp, sizeof(tmp), err, sizeof(err));
     if (!m) {
-        _snprintf(g_model_msg, sizeof(g_model_msg), "models: %ls: %s", g_models[idx].wname, err);
+        msg_setf("models: %ls: %s", g_models[idx].wname, err);
         return NULL;
     }
     g_models[idx].mesh = m;
@@ -1321,6 +1421,7 @@ static void models_poll(int force) {
     if (!force && g_filesig_valid && strcmp(sig, g_filesig) == 0) return;
 
     g_model_msg[0] = '\0';
+    g_msg_time = 0.0;
     {
         char keep[64];
         strncpy(keep, g_shape_name, sizeof(keep) - 1); keep[sizeof(keep) - 1] = '\0';
@@ -1347,7 +1448,7 @@ static void models_poll(int force) {
             ++g_model_count;
         }
         if (ne > MAX_MODELS)
-            _snprintf(g_model_msg, sizeof(g_model_msg), "models: only first %d files loaded", MAX_MODELS);
+            msg_setf("models: only first %d files loaded", MAX_MODELS);
 
         strncpy(g_filesig, sig, sizeof(g_filesig) - 1);
         g_filesig[sizeof(g_filesig) - 1] = '\0';
@@ -1390,8 +1491,11 @@ static void print_help(void) {
         "  TAB                  Toggle the model list on the right; then pick\n"
         "                       with Up/Down (tilt pauses) and load with\n"
         "                       SPACE/ENTER; scroll with the mouse wheel\n"
+        "  LEFT / RIGHT         In the list: move the shape-colour slider\n"
+        "                       (256-colour scale, applied live)\n"
         "  PAGE UP / PAGE DOWN  Weaker / stronger LOD for meshes that were\n"
         "                       reduced from too many triangles\n"
+        "  POS1 (HOME)          Toggle the FPS display (bottom-left)\n"
         "  R                    Rescan the models/ folder\n"
         "  q                    Quit\n\n"
         "Drop .stl/.obj/.ply files into the 'models' folder next to this\n"
@@ -1497,6 +1601,7 @@ int main(int argc, char **argv) {
     double scan_acc = 0.0;
 
     if (!parse_args(argc, argv)) return 1;
+    colors_init();
 
     build_registry();
     models_init();
@@ -1610,6 +1715,9 @@ int main(int argc, char **argv) {
                                 else if (ch == '-' || ch == '_') { g_speed -= SPEED_STEP; if (g_speed < MIN_SPEED) g_speed = MIN_SPEED; }
                                 else if (vk == VK_PRIOR) apply_lod(-1);
                                 else if (vk == VK_NEXT)  apply_lod(1);
+                                else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
+                                else if (vk == VK_LEFT)  { if (g_color_sel > 0) { --g_color_sel; g_fg_color = COLORS[g_color_sel]; } }
+                                else if (vk == VK_RIGHT) { if (g_color_sel < COLOR_N - 1) { ++g_color_sel; g_fg_color = COLORS[g_color_sel]; } }
                                 else if (ch == 'q' || ch == 'Q') g_running = 0;
                                 else if (ch == 'r' || ch == 'R') models_poll(1);
                             } else {
@@ -1632,6 +1740,7 @@ int main(int argc, char **argv) {
                                 else if (ch == '-' || ch == '_') { g_speed -= SPEED_STEP; if (g_speed < MIN_SPEED) g_speed = MIN_SPEED; }
                                 else if (vk == VK_PRIOR) apply_lod(-1);
                                 else if (vk == VK_NEXT)  apply_lod(1);
+                                else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
                                 else if (ch == 'r' || ch == 'R') models_poll(1);
                             }
                         } else if (r->EventType == MOUSE_EVENT && g_menu_open) {
@@ -1657,8 +1766,9 @@ int main(int argc, char **argv) {
                 grid = (char *)malloc((size_t)cols * rows);
                 if (!grid) break;
                 free(out);
-                out = (char *)malloc((size_t)cols * rows + (size_t)rows * 2 + 32);
+                out = (char *)malloc((size_t)cols * rows * 6 + (size_t)rows * 4 + 256);
                 if (!out) break;
+                cc_ensure(cols * rows);
                 g_shattered = 0; /* particle field is tied to the old size */
                 write_all(h_out, is_console, "\x1b[2J", -1);
             }
@@ -1672,11 +1782,27 @@ int main(int argc, char **argv) {
         if (dt > 0.10) dt = 0.10;
         if (dt < 0.0)  dt = 0.0;
 
+        /* auto-hide the status message a few seconds after it was set */
+        if (g_msg_time > 0.0) {
+            g_msg_time -= dt;
+            if (g_msg_time <= 0.0) { g_msg_time = 0.0; g_model_msg[0] = '\0'; }
+        }
+
+        /* FPS estimate over ~0.5 s windows */
+        {
+            static int    frames = 0;
+            static double facc = 0.0;
+            ++frames;
+            facc += dt;
+            if (facc >= 0.5) { g_fps = (double)frames / facc; frames = 0; facc = 0.0; }
+        }
+
         /* --- poll the models folder (~1 s) ---------------------------- */
         scan_acc += dt;
         if (scan_acc >= 1.0) { scan_acc = 0.0; models_poll(0); }
 
         /* --- update + render ------------------------------------------ */
+        if (g_cc) memset(g_cc, -1, sizeof(short) * (size_t)cols * rows);
         if (!g_shattered) {
             angle_deg += g_speed * dt;
             while (angle_deg >= 360.0) angle_deg -= 360.0;
@@ -1689,14 +1815,26 @@ int main(int argc, char **argv) {
         draw_hud(grid, cols, rows);
         if (g_menu_open) draw_menu(grid, cols, rows);
 
-        /* --- present -------------------------------------------------- */
+        /* --- present (per-cell colour) -------------------------------- */
         {
             char *o = out;
-            int r;
+            int r, c, cur = -2;
             *o++ = '\x1b'; *o++ = '['; *o++ = 'H';
             for (r = 0; r < rows; ++r) {
-                memcpy(o, grid + (size_t)r * cols, (size_t)cols);
-                o += cols;
+                for (c = 0; c < cols; ++c) {
+                    size_t idx = (size_t)r * cols + c;
+                    int want;
+                    if (g_cc && g_cc[idx] >= 0) want = g_cc[idx];
+                    else if (is_ui_cell(r, c))  want = -1;
+                    else                        want = g_fg_color;
+                    if (want != cur) {
+                        if (want < 0) o += sprintf(o, "\x1b[39m");
+                        else          o += sprintf(o, "\x1b[38;5;%dm", want);
+                        cur = want;
+                    }
+                    *o++ = grid[idx];
+                }
+                if (cur != -1) { memcpy(o, "\x1b[39m", 5); o += 5; cur = -1; }
                 if (r < rows - 1) { *o++ = '\r'; *o++ = '\n'; }
             }
             *o = '\0';
