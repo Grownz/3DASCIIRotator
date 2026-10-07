@@ -6,6 +6,7 @@ native `.exe`.
 
 <p align="center">
   <img src="docs/companion.gif" alt="Rotating companion cube">
+  <img src="docs/moses.gif" alt="Rotating Moses statue">
 </p>
 
 ## Download
@@ -219,10 +220,11 @@ settles into a shallow debris layer on the floor the object was resting on.
   src/berlin_model.h    embedded Brandenburg Gate mesh (generated)
   src/china_model.h     embedded "Tank Man" scene mesh (generated)
   docs/companion.gif    preview animation (generated)
+  docs/moses.gif        preview animation (generated)
   docs/models-feature.md  design notes for user models
   tools/make_stego_model.py    regenerates src/stego_model.h
   tools/make_shape_models.py   regenerates the other model headers
-  tools/make_preview_gif.py    regenerates docs/companion.gif
+  tools/make_preview_gif.py    regenerates the preview GIFs (docs/*.gif)
   build.bat             MSVC build script
   readme.md             this file
   changelog.md          version history
