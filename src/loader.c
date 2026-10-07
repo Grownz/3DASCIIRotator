@@ -153,14 +153,15 @@ static int parse_stl(const unsigned char *b, size_t n, int max_tris,
 }
 
 /* ------------------------------------------------------------------- OBJ */
-static int parse_obj(const unsigned char *b, size_t n, int max_tris,
+/* Note: the buffer is modified in place (newlines are turned into NULs), so it
+ * is taken non-const. It is the private read buffer, freed by the caller. */
+static int parse_obj(unsigned char *b, size_t n, int max_tris,
                      RawMesh *out, char *err, int errsz) {
     FVec V = {0};
     IVec T = {0};
-    char *buf = (char *)malloc(n + 1);
+    char *buf = (char *)b;
     char *line, *next;
-    if (!buf) { seterr(err, errsz, "out of memory"); return 0; }
-    memcpy(buf, b, n + 1);
+    if (n == 0) { seterr(err, errsz, "empty file"); return 0; }
 
     for (line = buf; line && *line; line = next) {
         char *p = line;
@@ -171,7 +172,7 @@ static int parse_obj(const unsigned char *b, size_t n, int max_tris,
             float x, y, z; char *end;
             x = strtof(p + 1, &end); y = strtof(end, &end); z = strtof(end, &end);
             if (!fpush(&V, x) || !fpush(&V, y) || !fpush(&V, z)) {
-                ffree(&V); ifree(&T); free(buf); seterr(err, errsz, "out of memory"); return 0;
+                ffree(&V); ifree(&T); seterr(err, errsz, "out of memory"); return 0;
             }
         } else if (p[0] == 'f' && (p[1] == ' ' || p[1] == '\t')) {
             unsigned int idx[64];
@@ -193,16 +194,14 @@ static int parse_obj(const unsigned char *b, size_t n, int max_tris,
             }
             for (i = 2; i < k; ++i) {              /* fan triangulate */
                 if (!ipush(&T, idx[0]) || !ipush(&T, idx[i - 1]) || !ipush(&T, idx[i])) {
-                    ffree(&V); ifree(&T); free(buf); seterr(err, errsz, "out of memory"); return 0;
+                    ffree(&V); ifree(&T); seterr(err, errsz, "out of memory"); return 0;
                 }
                 if (T.n / 3 > max_tris) {
-                    ffree(&V); ifree(&T); free(buf); seterr(err, errsz, "too many triangles"); return 0;
+                    ffree(&V); ifree(&T); seterr(err, errsz, "too many triangles"); return 0;
                 }
             }
         }
     }
-    free(buf);
-
     out->nvert = V.n / 3;
     out->ntri = T.n / 3;
     if (out->nvert == 0 || out->ntri == 0) {

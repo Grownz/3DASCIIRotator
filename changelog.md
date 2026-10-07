@@ -4,6 +4,28 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.4] - 2026-10-08
+
+### Added
+- `--bench <frames>` renders offscreen and reports `ms/frame` and `fps`
+  (no console required), for measuring performance.
+
+### Changed
+- **Rendering is now multi-threaded** (OpenMP across all CPU cores).
+- The object/camera transform (spin + tilt + camera basis) is precomputed once
+  per frame instead of on every ray/SDF evaluation.
+- Analytic shapes use **adaptive 2x2 supersampling** (full anti-aliasing only
+  beside strong contrast edges).
+- Mesh ray tracing uses a cache-friendly **packed triangle layout**,
+  single-precision traversal, a precomputed inverse ray direction and
+  **near-child-first** BVH ordering.
+- SDF normals use a four-sample tetrahedron (was six-sample central
+  differences) and ambient occlusion uses fewer samples.
+- LOD decimation groups cells with a radix sort and reuses its buffers, and the
+  OBJ reader no longer copies the whole file — large models load noticeably
+  faster.
+- Build flags: `/fp:fast /GL /Oi /Ob3 /arch:AVX2` (the binary now targets AVX2).
+
 ## [0.2.3] - 2026-10-08
 
 ### Added

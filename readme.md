@@ -57,11 +57,17 @@ Prebuilt Windows x64 binaries are on the
 - **Clean exit.** `ESC` restores your console exactly as it was.
 - **Tiny and dependency-free.** Plain C99 compiled with MSVC straight to a
   native Windows x64 executable.
+- **Fast.** Rendering is multi-threaded (OpenMP, all cores), the object/camera
+  transform is hoisted out of the per-ray code, meshes use a cache-friendly BVH
+  with a packed triangle layout, and analytic shapes use adaptive supersampling.
+  `--bench <frames>` reports `ms/frame` and `fps`.
 
 ## Requirements
 
 - Windows 10 or newer (x64). Windows Terminal or the classic console both work
   (ANSI/VT escape sequences must be supported).
+- The prebuilt binary is compiled for **AVX2** (Haswell 2013 or newer) and
+  multi-threaded; rendering uses all available cores.
 - To build: Visual Studio 2022 or the Visual Studio Build Tools with the
   "Desktop development with C++" workload (MSVC compiler + Windows SDK). No
   other runtime is required. Regenerating the embedded models additionally
@@ -96,6 +102,9 @@ build\ascii3D.exe -s cube
 | `--snapshot` | Render a single frame as plain text to stdout and exit. |
 | `--shatter` | With `--snapshot`: shatter the solid and simulate the fall. |
 | `--sim <sec>` | With `--shatter`: how many seconds to simulate (default: `3`). |
+| `--menu` | With `--snapshot`: also draw the model list (preview). |
+| `--lod <level>` | With `--snapshot`: render at a given LOD level (`0`..`6`). |
+| `--bench <frames>` | Benchmark offscreen rendering (`ms/frame`, `fps`) and exit. |
 
 ### Examples
 
@@ -281,7 +290,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.3**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.4**. See [changelog.md](changelog.md) for details.
 
 ## Roadmap
 

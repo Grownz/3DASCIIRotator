@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.3
+ * 3D ASCII Rotator - version 0.2.4
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -42,7 +42,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.3"
+#define APP_VERSION "0.2.4"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -64,6 +64,7 @@
 #define MAX_TRIS     500000  /* soft cap for loaded models          */
 #define MAX_LOAD_TRIS 5000000 /* hard reader cap before LOD          */
 #define SUPER_TRIS   100000  /* above this, single sample per cell  */
+#define SUPER_TH       0.03  /* edge threshold for adaptive 2x2     */
 #define MAX_MODELS   32      /* max user models kept                */
 #define BVH_CACHE     3      /* BVHs kept alive (LRU)               */
 
@@ -96,6 +97,7 @@ static int          g_menu_sel = 0;
 static int          g_menu_scroll = 0;
 static int          g_menu_start = 0;              /* --menu (snapshot preview) */
 static int          g_lod_arg = -1;                /* --lod level (snapshot) */
+static int          g_bench = 0;                   /* --bench <frames>      */
 
 /* --- status message (auto-hides), FPS HUD, shape colour, menu slider ----- */
 static int    g_show_fps = 0;
@@ -105,6 +107,15 @@ static int    g_fg_color = 7;                      /* ANSI colour of the shape *
 static int    g_color_sel = 0;                     /* index into COLORS[]      */
 static short *g_cc = NULL;                         /* per-cell colour override */
 static int    g_cc_cap = 0;
+static double *g_lum = NULL;                       /* per-cell luminance buffer */
+static int    g_lum_cap = 0;
+
+static void lum_ensure(int n) {
+    if (n > g_lum_cap) {
+        double *p = (double *)realloc(g_lum, sizeof(double) * (size_t)n);
+        if (p) { g_lum = p; g_lum_cap = n; }
+    }
+}
 static int    g_hud_len = 0, g_msg_len = 0, g_fps_len = 0, g_menu_x0 = -1, g_rows = 0;
 
 /* Usable 256-colour indices: everything except black (0) and the five
@@ -153,7 +164,6 @@ typedef struct { double x, y, z; } v3;
 
 static v3 v3_make(double x, double y, double z) { v3 r; r.x = x; r.y = y; r.z = z; return r; }
 static v3 v3_add(v3 a, v3 b)   { return v3_make(a.x + b.x, a.y + b.y, a.z + b.z); }
-static v3 v3_sub(v3 a, v3 b)   { return v3_make(a.x - b.x, a.y - b.y, a.z - b.z); }
 static v3 v3_mul(v3 a, double s){ return v3_make(a.x * s, a.y * s, a.z * s); }
 static double v3_dot(v3 a, v3 b){ return a.x * b.x + a.y * b.y + a.z * b.z; }
 static double v3_len(v3 a)     { return sqrt(v3_dot(a, a)); }
@@ -180,19 +190,33 @@ static v3 rot_x(v3 p, double a) {
  * vertical axis is applied by rotating the query point into object space.
  */
 
+/* Per-frame transform cache: cos/sin of the spin angle and tilt plus the
+ * camera basis are computed once per frame so the hot per-ray / per-SDF code
+ * never calls the trig functions. */
+static double g_ca = 1.0, g_sa = 0.0, g_ct = 1.0, g_st = 0.0;
+static v3     g_cam_ro, g_cam_fwd, g_cam_right, g_cam_up;
+
+static void update_transform(void) {
+    double t = g_tilt * (PI / 180.0);
+    g_ca = cos(g_angle); g_sa = sin(g_angle);
+    g_ct = cos(t);       g_st = sin(t);
+}
+
 /* Map a world point into the object's own frame (undo spin, then tilt). */
 static v3 to_object(v3 p) {
-    return rot_z(rot_x(p, g_tilt * (PI / 180.0)), -g_angle);
+    double qx = p.x, qy = p.y * g_ct - p.z * g_st, qz = p.y * g_st + p.z * g_ct;
+    return v3_make(qx * g_ca + qy * g_sa, -qx * g_sa + qy * g_ca, qz);
 }
 
 /* Map a direction from object space back to world space. */
 static v3 from_object(v3 n) {
-    return rot_x(rot_z(n, g_angle), -g_tilt * (PI / 180.0));
+    double qx = n.x * g_ca - n.y * g_sa, qy = n.x * g_sa + n.y * g_ca, qz = n.z;
+    return v3_make(qx, qy * g_ct + qz * g_st, -qy * g_st + qz * g_ct);
 }
 
 /* ---- mesh shapes: ray traced with a bounding-volume hierarchy ----------- */
 
-typedef struct { float mn[3], mx[3]; int start, count, right; } BvhNode;
+typedef struct { float mn[3], mx[3]; int start, count, right, axis; } BvhNode;
 
 typedef struct {
     const float        *verts;
@@ -204,6 +228,7 @@ typedef struct {
     double   r, hz;   /* rotation-invariant half-extents used for auto-fit */
     double   elev;    /* camera elevation used for this shape              */
     double   zoom;    /* multiplier on the auto-fit scale                  */
+    float   *tdata;   /* ntri*9: the three vertices, packed per triangle   */
     float    bmin[3], bmax[3]; /* object-space bounding box                 */
     int      owned;   /* 1 = verts/tris are malloc'd (free on destroy)     */
     int      built;   /* 1 = BVH is built                                  */
@@ -224,7 +249,8 @@ static const float *tri_p(const MeshDef *m, int tri, int k) {
 }
 
 static void tri_bounds(const MeshDef *m, int tri, float *mn, float *mx) {
-    const float *a = tri_p(m, tri, 0), *b = tri_p(m, tri, 1), *c = tri_p(m, tri, 2);
+    const float *t = &m->tdata[(size_t)tri * 9];
+    const float *a = t, *b = t + 3, *c = t + 6;
     int i;
     for (i = 0; i < 3; ++i) {
         float lo = a[i], hi = a[i];
@@ -269,6 +295,7 @@ static int bvh_build(MeshDef *m, int lo, int hi) {
         for (k = 0; k < 3; ++k) { float e = mx[k] - mn[k]; if (e > best) { best = e; a = k; } }
     }
     g_axis = a;
+    m->bvh[node].axis = a;
     g_sort_mesh = m;
     qsort(&m->order[lo], (size_t)(hi - lo), sizeof(int), tri_cmp);
     {
@@ -280,83 +307,87 @@ static int bvh_build(MeshDef *m, int lo, int hi) {
 }
 
 
-/* Ray versus axis-aligned box; returns 1 and the entry/exit distances. */
-static int aabb_hit(v3 ro, v3 rd, const float *mn, const float *mx,
-                    double margin, double *tn, double *tf) {
-    double t0 = -1e30, t1 = 1e30, o[3], d[3];
+/* Ray versus axis-aligned box (float, inverse direction precomputed). */
+static int aabb_hit(const float *o, const float *d, const float *inv,
+                    const float *mn, const float *mx, float *tn, float *tf) {
+    float t0 = -1e30f, t1 = 1e30f;
     int i;
-    o[0] = ro.x; o[1] = ro.y; o[2] = ro.z;
-    d[0] = rd.x; d[1] = rd.y; d[2] = rd.z;
     for (i = 0; i < 3; ++i) {
-        double lo = (double)mn[i] - margin, hi = (double)mx[i] + margin;
-        if (fabs(d[i]) < 1e-9) {
-            if (o[i] < lo || o[i] > hi) return 0;
-        } else {
-            double inv = 1.0 / d[i];
-            double ta = (lo - o[i]) * inv, tb = (hi - o[i]) * inv, tmp;
-            if (ta > tb) { tmp = ta; ta = tb; tb = tmp; }
-            if (ta > t0) t0 = ta;
-            if (tb < t1) t1 = tb;
-            if (t0 > t1) return 0;
+        float ta, tb, tmp;
+        if (d[i] == 0.0f) {
+            if (o[i] < mn[i] || o[i] > mx[i]) return 0;
+            continue;
         }
+        ta = (mn[i] - o[i]) * inv[i];
+        tb = (mx[i] - o[i]) * inv[i];
+        if (ta > tb) { tmp = ta; ta = tb; tb = tmp; }
+        if (ta > t0) t0 = ta;
+        if (tb < t1) t1 = tb;
+        if (t0 > t1) return 0;
     }
     *tn = t0; *tf = t1;
     return 1;
 }
 
-/* Moller-Trumbore ray/triangle intersection (two-sided). */
-static int ray_tri(const MeshDef *m, v3 ro, v3 rd, int tri, double *tout) {
-    const float *v0 = tri_p(m, tri, 0), *v1 = tri_p(m, tri, 1), *v2 = tri_p(m, tri, 2);
-    double e1x = v1[0] - v0[0], e1y = v1[1] - v0[1], e1z = v1[2] - v0[2];
-    double e2x = v2[0] - v0[0], e2y = v2[1] - v0[1], e2z = v2[2] - v0[2];
-    double px = rd.y * e2z - rd.z * e2y;
-    double py = rd.z * e2x - rd.x * e2z;
-    double pz = rd.x * e2y - rd.y * e2x;
-    double det = e1x * px + e1y * py + e1z * pz;
-    double inv, u, v, t, qx, qy, qz;
-    double tx = ro.x - v0[0], ty = ro.y - v0[1], tz = ro.z - v0[2];
-    if (fabs(det) < 1e-12) return 0;
-    inv = 1.0 / det;
+/* Moller-Trumbore ray/triangle intersection (two-sided, float). */
+static int ray_tri(const MeshDef *m, const float *ro, const float *rd, int tri, float *tout) {
+    const float *v0 = &m->tdata[(size_t)tri * 9], *v1 = v0 + 3, *v2 = v0 + 6;
+    float e1x = v1[0] - v0[0], e1y = v1[1] - v0[1], e1z = v1[2] - v0[2];
+    float e2x = v2[0] - v0[0], e2y = v2[1] - v0[1], e2z = v2[2] - v0[2];
+    float px = rd[1] * e2z - rd[2] * e2y;
+    float py = rd[2] * e2x - rd[0] * e2z;
+    float pz = rd[0] * e2y - rd[1] * e2x;
+    float det = e1x * px + e1y * py + e1z * pz;
+    float inv, u, v, t, qx, qy, qz;
+    float tx = ro[0] - v0[0], ty = ro[1] - v0[1], tz = ro[2] - v0[2];
+    if (fabsf(det) < 1e-12f) return 0;
+    inv = 1.0f / det;
     u = (tx * px + ty * py + tz * pz) * inv;
-    if (u < 0.0 || u > 1.0) return 0;
+    if (u < 0.0f || u > 1.0f) return 0;
     qx = ty * e1z - tz * e1y;
     qy = tz * e1x - tx * e1z;
     qz = tx * e1y - ty * e1x;
-    v = (rd.x * qx + rd.y * qy + rd.z * qz) * inv;
-    if (v < 0.0 || u + v > 1.0) return 0;
+    v = (rd[0] * qx + rd[1] * qy + rd[2] * qz) * inv;
+    if (v < 0.0f || u + v > 1.0f) return 0;
     t = (e2x * qx + e2y * qy + e2z * qz) * inv;
-    if (t < 1e-4) return 0;
+    if (t < 1e-4f) return 0;
     *tout = t;
     return 1;
 }
 
-/* Nearest triangle hit along an object-space ray. */
+/* Nearest triangle hit along an object-space ray (float, near child first). */
 static int mesh_trace(const MeshDef *m, v3 ro, v3 rd, double *tout, int *triout) {
     int stack[64], sp = 0, best_tri = -1;
-    double best = 1e30;
+    float best = 1e30f;
+    float rof[3], rdf[3], inv[3];
+    int k;
     if (!m || !m->bvh) return 0;
+    rof[0] = (float)ro.x; rof[1] = (float)ro.y; rof[2] = (float)ro.z;
+    rdf[0] = (float)rd.x; rdf[1] = (float)rd.y; rdf[2] = (float)rd.z;
+    for (k = 0; k < 3; ++k) inv[k] = (rdf[k] != 0.0f) ? 1.0f / rdf[k] : 0.0f;
     stack[sp++] = 0;
     while (sp > 0) {
         int ni = stack[--sp];
-        BvhNode *nd = &m->bvh[ni];
-        double tn, tf;
-        if (!aabb_hit(ro, rd, nd->mn, nd->mx, 0.0, &tn, &tf)) continue;
+        const BvhNode *nd = &m->bvh[ni];
+        float tn, tf;
+        if (!aabb_hit(rof, rdf, inv, nd->mn, nd->mx, &tn, &tf)) continue;
         if (tn > best) continue;
         if (nd->right < 0) {
             int i;
             for (i = nd->start; i < nd->start + nd->count; ++i) {
-                double t;
-                if (ray_tri(m, ro, rd, m->order[i], &t) && t < best) {
+                float t;
+                if (ray_tri(m, rof, rdf, m->order[i], &t) && t < best) {
                     best = t; best_tri = m->order[i];
                 }
             }
         } else if (sp < 62) {
-            stack[sp++] = ni + 1;
-            stack[sp++] = nd->right;
+            int left = ni + 1, right = nd->right;
+            if (rdf[nd->axis] >= 0.0f) { stack[sp++] = right; stack[sp++] = left; }
+            else                        { stack[sp++] = left;  stack[sp++] = right; }
         }
     }
     if (best_tri < 0) return 0;
-    *tout = best; *triout = best_tri;
+    *tout = (double)best; *triout = best_tri;
     return 1;
 }
 
@@ -366,6 +397,7 @@ static void mesh_release(MeshDef *m) {
     free(m->bvh);  m->bvh = NULL;
     free(m->order); m->order = NULL;
     free(m->cent); m->cent = NULL;
+    free(m->tdata); m->tdata = NULL;
     m->built = 0;
 }
 
@@ -376,12 +408,19 @@ static void mesh_build(MeshDef *m) {
     m->bvh   = (BvhNode *)malloc(sizeof(BvhNode) * (size_t)(2 * m->ntri + 1));
     m->order = (int *)malloc(sizeof(int) * (size_t)m->ntri);
     m->cent  = (float *)malloc(sizeof(float) * (size_t)m->ntri * 3);
-    if (!m->bvh || !m->order || !m->cent) { mesh_release(m); return; }
+    m->tdata = (float *)malloc(sizeof(float) * 9 * (size_t)m->ntri);
+    if (!m->bvh || !m->order || !m->cent || !m->tdata) { mesh_release(m); return; }
     for (i = 0; i < m->ntri; ++i) {
         const float *a = tri_p(m, i, 0), *b = tri_p(m, i, 1), *c = tri_p(m, i, 2);
+        float *t = &m->tdata[(size_t)i * 9];
         int k;
+        for (k = 0; k < 3; ++k) {
+            t[k]     = a[k];   /* pack the three vertices together so ray/tri */
+            t[3 + k] = b[k];   /* tests stay in one cache line                */
+            t[6 + k] = c[k];
+            m->cent[i * 3 + k] = (a[k] + b[k] + c[k]) / 3.0f;
+        }
         m->order[i] = i;
-        for (k = 0; k < 3; ++k) m->cent[i * 3 + k] = (a[k] + b[k] + c[k]) / 3.0f;
     }
     g_bvh_n = 0;
     bvh_build(m, 0, m->ntri);
@@ -645,23 +684,35 @@ static double world_sdf(v3 p) {
     return shape_sdf(to_object(p));
 }
 
+/* Surface normal from the SDF gradient. The tetrahedron technique needs only
+ * four samples instead of the six of central differences, with the same
+ * (first-order) accuracy. */
 static v3 world_normal(v3 p) {
     const double h = 0.0015;
-    double dx = world_sdf(v3_add(p, v3_make(h, 0, 0))) - world_sdf(v3_sub(p, v3_make(h, 0, 0)));
-    double dy = world_sdf(v3_add(p, v3_make(0, h, 0))) - world_sdf(v3_sub(p, v3_make(0, h, 0)));
-    double dz = world_sdf(v3_add(p, v3_make(0, 0, h))) - world_sdf(v3_sub(p, v3_make(0, 0, h)));
-    return v3_norm(v3_make(dx, dy, dz));
+    const double kx[4] = { 1.0, -1.0, -1.0, 1.0 };
+    const double ky[4] = { -1.0, -1.0, 1.0, 1.0 };
+    const double kz[4] = { -1.0, 1.0, -1.0, 1.0 };
+    double nx = 0.0, ny = 0.0, nz = 0.0;
+    int i;
+    for (i = 0; i < 4; ++i) {
+        double d = world_sdf(v3_make(p.x + kx[i] * h, p.y + ky[i] * h, p.z + kz[i] * h));
+        nx += kx[i] * d;
+        ny += ky[i] * d;
+        nz += kz[i] * d;
+    }
+    return v3_norm(v3_make(nx, ny, nz));
 }
 
 /* Ambient occlusion estimated from the distance field along the normal. */
 static double ambient_occlusion(v3 p, v3 n) {
     double occ = 0.0, sca = 1.0;
     int i;
-    for (i = 0; i < 5; ++i) {
-        double hd = 0.02 + 0.10 * ((double)i / 4.0);
+    for (i = 0; i < 4; ++i) {
+        double hd = 0.02 + 0.12 * ((double)i / 3.0);
         double d  = world_sdf(v3_add(p, v3_mul(n, hd)));
         occ += (hd - d) * sca;
         sca *= 0.90;
+        if (sca < 0.05) break;
     }
     {
         double ao = 1.0 - 2.6 * occ;
@@ -695,18 +746,23 @@ static double light_surface(v3 n, v3 view, double ao) {
     return lum;
 }
 
+/* Camera basis for the current shape; recomputed once per frame. */
+static void update_camera(void) {
+    double elev = g_mesh ? g_mesh->elev : CAM_ELEV;
+    double e = elev * (PI / 180.0);
+    double ce = cos(e), se = sin(e);
+    g_cam_ro    = v3_make(0.0, -CAM_DIST * ce, CAM_DIST * se);
+    g_cam_fwd   = v3_make(0.0, ce, -se);
+    g_cam_right = v3_make(1.0, 0.0, 0.0);
+    g_cam_up    = v3_make(0.0, se, ce);
+}
+
 /* Returns luminance in [0,1] for a single view-plane ray (0 = background). */
 static double shade_ray(double hx, double vz) {
-    double elev = g_mesh ? g_mesh->elev : CAM_ELEV;
-    double e    = elev * (PI / 180.0);
-    double ce   = cos(e), se = sin(e);
-    v3 ro       = v3_make(0.0, -CAM_DIST * ce, CAM_DIST * se);
-    v3 fwd      = v3_make(0.0, ce, -se);
-    v3 right    = v3_make(1.0, 0.0, 0.0);
-    v3 up       = v3_make(0.0, se, ce);
-    v3 rd       = v3_norm(v3_add(v3_add(v3_mul(fwd, CAM_DIST), v3_mul(right, hx)),
-                                 v3_mul(up, vz)));
-    v3 view     = v3_mul(rd, -1.0);
+    v3 ro   = g_cam_ro;
+    v3 rd   = v3_norm(v3_add(v3_add(v3_mul(g_cam_fwd, CAM_DIST), v3_mul(g_cam_right, hx)),
+                             v3_mul(g_cam_up, vz)));
+    v3 view = v3_mul(rd, -1.0);
 
     if (g_mesh) {
         /* ray trace the embedded triangle mesh (sharp silhouette) */
@@ -718,7 +774,7 @@ static double shade_ray(double hx, double vz) {
         v3 n;
         const float *a, *b, *c;
         if (!mesh_trace(g_mesh, ro2, rd2, &t, &tri)) return 0.0;
-        a = tri_p(g_mesh, tri, 0); b = tri_p(g_mesh, tri, 1); c = tri_p(g_mesh, tri, 2);
+        a = &g_mesh->tdata[(size_t)tri * 9]; b = a + 3; c = a + 6;
         n = v3_norm(v3_make(
                 (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]),
                 (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]),
@@ -764,25 +820,85 @@ static double shade_cell(double cx, double cy, int cols, int rows) {
 
 /* ----------------------------------------------------------------- rendering */
 
+/* Map a luminance to a ramp character. */
+static char lum_char(double lum) {
+    int idx = (int)(lum * (RAMP_N - 1) + 0.5);
+    if (idx < 0) idx = 0;
+    if (idx >= RAMP_N) idx = RAMP_N - 1;
+    return RAMP[idx];
+}
+
 /* Fill a cols*rows character grid with the current shape. */
 static void render_grid(char *grid, int cols, int rows) {
     double aspect = CHAR_ASPECT * (double)cols / (double)rows;
-    int r, c;
+    int r;
 
+    update_transform();
+    update_camera();
     g_mesh_scale = g_mesh ? mesh_scale(g_mesh, aspect) : 1.0;
     g_super = (g_mesh && g_mesh->ntri > SUPER_TRIS) ? 0 : 1;
 
+    if (!g_super) {                        /* heavy mesh: one sample per cell */
+#pragma omp parallel for schedule(static)
+        for (r = 0; r < rows; ++r) {
+            int c;
+            double vz = (1.0 - ((double)r + 0.5) / (double)rows * 2.0) * VIEW_HALF;
+            for (c = 0; c < cols; ++c) {
+                double hx = (((double)c + 0.5) / (double)cols * 2.0 - 1.0) * VIEW_HALF * aspect;
+                grid[(size_t)r * cols + c] = lum_char(shade_ray(hx, vz));
+            }
+        }
+        return;
+    }
+
+    lum_ensure(cols * rows);
+
+    /* Triangle meshes have many hard facet edges, so adaptive sampling does not
+     * pay off there; keep the fixed 2x2 rule for the small ones. */
+    if (g_mesh) {
+#pragma omp parallel for schedule(static)
+        for (r = 0; r < rows; ++r) {
+            int c;
+            double vz = (1.0 - ((double)r + 0.5) / (double)rows * 2.0) * VIEW_HALF;
+            for (c = 0; c < cols; ++c) {
+                double hx = (((double)c + 0.5) / (double)cols * 2.0 - 1.0) * VIEW_HALF * aspect;
+                grid[(size_t)r * cols + c] = lum_char(shade_cell(hx, vz, cols, rows));
+            }
+        }
+        return;
+    }
+
+    /* pass 1: one sample per cell */
+#pragma omp parallel for schedule(static)
     for (r = 0; r < rows; ++r) {
-        double ndc_y = 1.0 - ((double)r + 0.5) / (double)rows * 2.0;
-        double vz    = ndc_y * VIEW_HALF;
+        int c;
+        double vz = (1.0 - ((double)r + 0.5) / (double)rows * 2.0) * VIEW_HALF;
         for (c = 0; c < cols; ++c) {
-            double ndc_x = ((double)c + 0.5) / (double)cols * 2.0 - 1.0;
-            double hx    = ndc_x * VIEW_HALF * aspect;
-            double lum   = shade_cell(hx, vz, cols, rows);
-            int idx      = (int)(lum * (RAMP_N - 1) + 0.5);
-            if (idx < 0) idx = 0;
-            if (idx >= RAMP_N) idx = RAMP_N - 1;
-            grid[(size_t)r * cols + c] = RAMP[idx];
+            double hx = (((double)c + 0.5) / (double)cols * 2.0 - 1.0) * VIEW_HALF * aspect;
+            double lum = shade_ray(hx, vz);
+            if (g_lum) g_lum[(size_t)r * cols + c] = lum;
+            grid[(size_t)r * cols + c] = lum_char(lum);   /* fallback if no buffer */
+        }
+    }
+    if (!g_lum) return;
+
+    /* pass 2: 2x2 supersample only cells beside a strong contrast edge */
+#pragma omp parallel for schedule(static)
+    for (r = 0; r < rows; ++r) {
+        int c;
+        double vz = (1.0 - ((double)r + 0.5) / (double)rows * 2.0) * VIEW_HALF;
+        for (c = 0; c < cols; ++c) {
+            double L = g_lum[(size_t)r * cols + c];
+            int edge = 0;
+            if (c > 0        && fabs(L - g_lum[(size_t)r * cols + (c - 1)]) > SUPER_TH) edge = 1;
+            if (c < cols - 1 && fabs(L - g_lum[(size_t)r * cols + (c + 1)]) > SUPER_TH) edge = 1;
+            if (r > 0        && fabs(L - g_lum[(size_t)(r - 1) * cols + c]) > SUPER_TH) edge = 1;
+            if (r < rows - 1 && fabs(L - g_lum[(size_t)(r + 1) * cols + c]) > SUPER_TH) edge = 1;
+            if (edge) {
+                double hx = (((double)c + 0.5) / (double)cols * 2.0 - 1.0) * VIEW_HALF * aspect;
+                L = shade_cell(hx, vz, cols, rows);
+            }
+            grid[(size_t)r * cols + c] = lum_char(L);
         }
     }
 }
@@ -1479,7 +1595,8 @@ static void print_help(void) {
         "      --shatter        With --snapshot: shatter and simulate the fall\n"
         "      --sim <sec>      With --shatter: seconds to simulate (default: 3)\n"
         "      --menu           With --snapshot: draw the model list (preview)\n"
-        "      --lod <level>    With --snapshot: apply an LOD level (0..%d)\n\n"
+        "      --lod <level>    With --snapshot: apply an LOD level (0..%d)\n"
+        "      --bench <frames> Benchmark offscreen rendering and exit\n\n"
         "Controls (interactive):\n"
         "  ESC                  Quit\n"
         "  +                    Increase spin by %d deg/s (max %d deg/s)\n"
@@ -1531,6 +1648,12 @@ static int parse_args(int argc, char **argv) {
                 return 0;
             }
             g_lod_arg = atoi(argv[++i]);
+        } else if (_stricmp(a, "--bench") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "error: --bench requires a value\n");
+                return 0;
+            }
+            g_bench = atoi(argv[++i]);
         } else if (_stricmp(a, "-s") == 0 || _stricmp(a, "--shape") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "error: %s requires a value\n", a);
@@ -1591,6 +1714,38 @@ static void write_all(HANDLE h, int is_console, const char *buf, int len) {
     }
 }
 
+/* Offscreen render benchmark: renders `frames` frames over one full turn and
+ * reports the average time per frame (no console required). */
+static int run_bench(int frames) {
+    const int cols = 120, rows = 40;
+    char *grid;
+    LARGE_INTEGER f, a, b;
+    int i;
+    double total_ms, per;
+    if (frames < 1) frames = 1;
+    grid = (char *)malloc((size_t)cols * rows);
+    if (!grid) return 1;
+    QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&a);
+    for (i = 0; i < frames; ++i) {
+        g_angle = (double)i * (2.0 * PI / (double)frames);
+        render_grid(grid, cols, rows);
+    }
+    QueryPerformanceCounter(&b);
+    total_ms = (double)(b.QuadPart - a.QuadPart) * 1000.0 / (double)f.QuadPart;
+    per = total_ms / (double)frames;
+    {
+        unsigned long long sum = 0;
+        int n = cols * rows, k;
+        for (k = 0; k < n; ++k) sum = sum * 131 + (unsigned char)grid[k];
+        printf("bench: %-10s %4d frames @ %dx%d  %8.3f ms/frame  %7.1f fps  (%s) cs=%llu\n",
+               g_shape_name, frames, cols, rows, per, (per > 0.0) ? 1000.0 / per : 0.0,
+               g_mesh ? "mesh" : "analytic", sum);
+    }
+    free(grid);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     HANDLE h_out, h_in;
     DWORD  orig_mode = 0, in_mode = 0;
@@ -1617,6 +1772,8 @@ int main(int argc, char **argv) {
     } else {
         select_index(0);
     }
+
+    if (g_bench > 0) return run_bench(g_bench);
 
     h_out = GetStdHandle(STD_OUTPUT_HANDLE);
     is_console = GetConsoleMode(h_out, &orig_mode) ? 1 : 0;
