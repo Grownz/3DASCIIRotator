@@ -11,6 +11,9 @@ tools/stegosaurus.glb
 # Downloaded source models / kits
 tools/models/
 
+# User-supplied models (created next to the executable)
+models/
+
 # Editor
 .vs/
 .vscode/

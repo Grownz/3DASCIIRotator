@@ -469,7 +469,7 @@ static const float BERLIN_VERT[6846] = {
   -0.066972f,0.012132f,0.611881f,-0.066972f,-0.012132f,0.611881f,
 };
 
-static const unsigned short BERLIN_TRI[13296] = {
+static const unsigned int BERLIN_TRI[13296] = {
   1,3,0,4,1,0,0,3,2,2,4,0,
   1,7,3,5,1,4,5,7,1,3,7,2,
   6,4,2,2,7,6,6,5,4,7,5,6,

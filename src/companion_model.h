@@ -447,7 +447,7 @@ static const float COMPANION_VERT[6516] = {
   -0.463286f,-1.352403f,-0.463117f,-0.484704f,-1.323615f,-0.483780f,
 };
 
-static const unsigned short COMPANION_TRI[6468] = {
+static const unsigned int COMPANION_TRI[6468] = {
   1,3,0,3,1,2,5,7,4,7,5,6,
   9,11,8,11,9,10,13,2,12,2,13,3,
   15,17,14,17,15,16,19,21,18,21,19,20,

@@ -181,7 +181,7 @@ static const float KEBAB_VERT[2526] = {
   -1.418322f,0.022676f,0.066486f,-1.418688f,0.022676f,0.099827f,
 };
 
-static const unsigned short KEBAB_TRI[4236] = {
+static const unsigned int KEBAB_TRI[4236] = {
   1,3,0,3,1,2,5,7,4,7,5,6,
   4,9,8,9,4,7,0,6,5,6,0,3,
   11,13,10,13,11,12,14,12,11,12,14,15,

@@ -1,14 +1,16 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.1.0
+ * 3D ASCII Rotator - version 0.2.0
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
  *
- * Rendering: signed-distance-field ray marching with per-pixel surface
- * normals, Blinn-Phong (diffuse + specular) shading, a hemispheric ambient
- * term, a fresnel rim light and screen-space-free SDF ambient occlusion.
- * Luminance is mapped onto a 10-level ASCII density ramp. Each character cell
- * is supersampled 2x2 for smoother silhouettes.
+ * Shapes are analytic signed-distance fields (cube, cylinder, diamond, sphere)
+ * or triangle meshes: the built-in models and any .stl/.obj/.ply dropped into
+ * a "models" folder next to the executable, which is rescanned live.
+ *
+ * Meshes are ray traced with a bounding-volume hierarchy and shaded flat;
+ * analytic shapes use SDF ray marching. Luminance is mapped onto a 15-level
+ * ASCII density ramp. Cells are supersampled 2x2 (1x for very heavy meshes).
  *
  * License: MIT. See LICENSE for the full text. No third-party dependencies.
  * ==========================================================================*/
@@ -23,6 +25,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
+
+#include "loader.h"
 
 #include "stego_model.h"
 #include "f1_model.h"
@@ -36,7 +41,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.1.0"
+#define APP_VERSION "0.2.0"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -55,6 +60,11 @@
 #define VIEW_HALF  1.55      /* half height of the view plane       */
 #define CHAR_ASPECT 0.5      /* console cell width / height         */
 
+#define MAX_TRIS     500000  /* triangle cap for loaded models      */
+#define SUPER_TRIS   100000  /* above this, single sample per cell  */
+#define MAX_MODELS   32      /* max user models kept                */
+#define BVH_CACHE     3      /* BVHs kept alive (LRU)               */
+
 #define PI 3.14159265358979323846
 
 #define RAMP    " .,:;~-=+*oO#%@"  /* dark -> bright, 15 levels       */
@@ -62,12 +72,8 @@
 
 /* ------------------------------------------------------------------- shapes */
 
-typedef enum { SH_CUBE = 0, SH_CYLINDER, SH_DIAMOND, SH_SPHERE,
-               SH_STEGO, SH_F1, SH_COMPANION, SH_MAUS,
-               SH_FISH, SH_KEBAB, SH_BERLIN, SH_CHINA } Shape;
+typedef enum { SH_CUBE = 0, SH_CYLINDER, SH_DIAMOND, SH_SPHERE } Shape;
 
-static Shape        g_shape       = SH_CUBE;
-static const char  *g_shape_name  = "cube";
 static volatile int g_running     = 1;
 static double       g_speed       = DEFAULT_SPEED; /* deg/s */
 static double       g_angle       = 0.0;           /* radians */
@@ -78,6 +84,9 @@ static double       g_start_tilt  = 0.0;           /* degrees */
 static int          g_shatter     = 0;             /* --shatter (snapshot) */
 static double       g_sim         = 3.0;           /* --sim seconds        */
 static int          g_shattered   = 0;             /* runtime shatter state */
+static char         g_req_shape[64] = "";          /* -s value, resolved later */
+static int          g_req_shape_set = 0;
+static char         g_model_msg[160] = "";         /* last model load message  */
 
 /* ------------------------------------------------------------------ vectors */
 
@@ -127,15 +136,18 @@ static v3 from_object(v3 n) {
 typedef struct { float mn[3], mx[3]; int start, count, right; } BvhNode;
 
 typedef struct {
-    const float          *verts;
-    const unsigned short *tris;
+    const float        *verts;
+    const unsigned int *tris;
     int    nvert, ntri;
     BvhNode *bvh;
     int     *order;
     float   *cent;
     double   r, hz;   /* rotation-invariant half-extents used for auto-fit */
     double   elev;    /* camera elevation used for this shape              */
+    double   zoom;    /* multiplier on the auto-fit scale                  */
     float    bmin[3], bmax[3]; /* object-space bounding box                 */
+    int      owned;   /* 1 = verts/tris are malloc'd (free on destroy)     */
+    int      built;   /* 1 = BVH is built                                  */
 } MeshDef;
 
 static int g_bvh_n = 0;          /* node counter while building        */
@@ -143,7 +155,7 @@ static int g_axis  = 0;          /* split axis while sorting           */
 static const MeshDef *g_sort_mesh = NULL;
 
 static const float *tri_p(const MeshDef *m, int tri, int k) {
-    int vi = (int)m->tris[tri * 3 + k];
+    unsigned int vi = m->tris[tri * 3 + k];
     return &m->verts[(size_t)vi * 3];
 }
 
@@ -284,14 +296,23 @@ static int mesh_trace(const MeshDef *m, v3 ro, v3 rd, double *tout, int *triout)
     return 1;
 }
 
+/* Release the BVH/centroid data of a mesh (keeps verts/tris). */
+static void mesh_release(MeshDef *m) {
+    if (!m) return;
+    free(m->bvh);  m->bvh = NULL;
+    free(m->order); m->order = NULL;
+    free(m->cent); m->cent = NULL;
+    m->built = 0;
+}
+
 /* Build the BVH and the fit extents for a mesh. */
-static void mesh_init(MeshDef *m) {
+static void mesh_build(MeshDef *m) {
     int i;
-    if (!m || m->bvh) return;
+    if (!m || m->built || m->ntri <= 0) return;
     m->bvh   = (BvhNode *)malloc(sizeof(BvhNode) * (size_t)(2 * m->ntri + 1));
     m->order = (int *)malloc(sizeof(int) * (size_t)m->ntri);
     m->cent  = (float *)malloc(sizeof(float) * (size_t)m->ntri * 3);
-    if (!m->bvh || !m->order || !m->cent) return;
+    if (!m->bvh || !m->order || !m->cent) { mesh_release(m); return; }
     for (i = 0; i < m->ntri; ++i) {
         const float *a = tri_p(m, i, 0), *b = tri_p(m, i, 1), *c = tri_p(m, i, 2);
         int k;
@@ -314,6 +335,15 @@ static void mesh_init(MeshDef *m) {
             if (v[k] > m->bmax[k]) m->bmax[k] = v[k];
         }
     }
+    m->built = 1;
+}
+
+/* Fully destroy a mesh (BVH + owned verts/tris + the struct). */
+static void mesh_destroy(MeshDef *m) {
+    if (!m) return;
+    mesh_release(m);
+    if (m->owned) { free((void *)m->verts); free((void *)m->tris); }
+    free(m);
 }
 
 /* Does the model fit the view at scale s? (perspective, current orientation) */
@@ -346,59 +376,155 @@ static double mesh_scale(const MeshDef *m, double aspect) {
         double mid = (lo + hi) * 0.5;
         if (mesh_fits(m, mid, hw, hh)) lo = mid; else hi = mid;
     }
-    return lo;
+    return lo * (m->zoom > 0.01 ? m->zoom : 1.0);
 }
 
 static MeshDef g_mesh_stego = { STEGO_VERT, STEGO_TRI, STEGO_NVERT, STEGO_NTRI,
-                                NULL, NULL, NULL, 0.0, 0.0, 12.0 };
+                                NULL, NULL, NULL, 0.0, 0.0, 12.0, 1.0 };
 static MeshDef g_mesh_f1    = { F1_VERT, F1_TRI, F1_NVERT, F1_NTRI,
-                                NULL, NULL, NULL, 0.0, 0.0, 16.0 };
+                                NULL, NULL, NULL, 0.0, 0.0, 16.0, 1.0 };
 static MeshDef g_mesh_comp  = { COMPANION_VERT, COMPANION_TRI, COMPANION_NVERT, COMPANION_NTRI,
-                                NULL, NULL, NULL, 0.0, 0.0, 18.0 };
+                                NULL, NULL, NULL, 0.0, 0.0, 18.0, 1.0 };
 static MeshDef g_mesh_maus  = { MAUS_VERT, MAUS_TRI, MAUS_NVERT, MAUS_NTRI,
-                                NULL, NULL, NULL, 0.0, 0.0, 12.0 };
+                                NULL, NULL, NULL, 0.0, 0.0, 12.0, 1.0 };
 static MeshDef g_mesh_fish  = { FISH_VERT, FISH_TRI, FISH_NVERT, FISH_NTRI,
-                                NULL, NULL, NULL, 0.0, 0.0, 12.0 };
+                                NULL, NULL, NULL, 0.0, 0.0, 12.0, 1.0 };
 static MeshDef g_mesh_kebab = { KEBAB_VERT, KEBAB_TRI, KEBAB_NVERT, KEBAB_NTRI,
-                                NULL, NULL, NULL, 0.0, 0.0, 14.0 };
+                                NULL, NULL, NULL, 0.0, 0.0, 14.0, 1.0 };
 static MeshDef g_mesh_berlin = { BERLIN_VERT, BERLIN_TRI, BERLIN_NVERT, BERLIN_NTRI,
-                                NULL, NULL, NULL, 0.0, 0.0, 8.0 };
+                                NULL, NULL, NULL, 0.0, 0.0, 8.0, 1.0 };
 static MeshDef g_mesh_china = { CHINA_VERT, CHINA_TRI, CHINA_NVERT, CHINA_NTRI,
-                                NULL, NULL, NULL, 0.0, 0.0, 6.0 };
+                                NULL, NULL, NULL, 0.0, 0.0, 6.0, 1.0 };
 
-static MeshDef *mesh_for_shape(Shape s) {
-    switch (s) {
-    case SH_STEGO:     return &g_mesh_stego;
-    case SH_F1:        return &g_mesh_f1;
-    case SH_COMPANION: return &g_mesh_comp;
-    case SH_MAUS:      return &g_mesh_maus;
-    case SH_FISH:      return &g_mesh_fish;
-    case SH_KEBAB:     return &g_mesh_kebab;
-    case SH_BERLIN:    return &g_mesh_berlin;
-    case SH_CHINA:     return &g_mesh_china;
-    default:           return NULL;
+/* ---- registry: built-in shapes + user models, in insertion order --------- */
+
+typedef struct {
+    char     name[64];
+    int      analytic;   /* SH_* for analytic shapes, -1 for meshes */
+    MeshDef *mesh;       /* NULL for analytic shapes                */
+} ShapeItem;
+
+static ShapeItem *g_items = NULL;
+static int        g_item_count = 0, g_item_cap = 0, g_item_index = 0;
+
+static MeshDef *g_mesh = NULL;        /* mesh of the current item, or NULL */
+static double   g_mesh_scale = 1.0;   /* current fit-to-view scale         */
+static int      g_super = 1;          /* 1 = 2x2 supersample, 0 = single   */
+static int      g_analytic = SH_CUBE; /* analytic kind when g_mesh == NULL */
+static char     g_shape_name_buf[64] = "cube";
+static const char *g_shape_name = g_shape_name_buf;
+
+/* ---- LRU cache of built BVHs (only the last BVH_CACHE are kept) ---------- */
+
+static MeshDef *g_lru[BVH_CACHE];
+static int      g_lru_n = 0;
+
+static void lru_touch(MeshDef *m) {
+    int i, j;
+    for (i = 0; i < g_lru_n; ++i)
+        if (g_lru[i] == m) { for (j = i; j < g_lru_n - 1; ++j) g_lru[j] = g_lru[j + 1]; --g_lru_n; break; }
+    if (!m->built) mesh_build(m);
+    if (g_lru_n < BVH_CACHE) {
+        g_lru[g_lru_n++] = m;
+    } else {
+        mesh_release(g_lru[0]);
+        for (j = 0; j < BVH_CACHE - 1; ++j) g_lru[j] = g_lru[j + 1];
+        g_lru[BVH_CACHE - 1] = m;
     }
 }
 
-static MeshDef *g_mesh = NULL;       /* mesh for the current shape, or NULL */
-static double   g_mesh_scale = 1.0;  /* current fit-to-view scale           */
+static void lru_clear(void) {
+    int i;
+    for (i = 0; i < g_lru_n; ++i) mesh_release(g_lru[i]);
+    g_lru_n = 0;
+}
 
-/* All shapes in insertion order; Space cycles through them. */
-static const char *SHAPE_NAMES[] = {
-    "cube", "cylinder", "diamond", "sphere", "stego", "f1",
-    "companion", "maus", "fish", "kebab", "berlin", "china"
-};
-#define N_SHAPES ((int)(sizeof(SHAPE_NAMES) / sizeof(SHAPE_NAMES[0])))
+/* ---- item list ---------------------------------------------------------- */
 
-static void select_shape(Shape s) {
-    g_shape = s;
-    g_shape_name = SHAPE_NAMES[(int)s];
-    g_mesh = mesh_for_shape(s);
-    if (g_mesh) mesh_init(g_mesh);
+static int items_add(const char *name, int analytic, MeshDef *mesh) {
+    if (g_item_count == g_item_cap) {
+        int nc = g_item_cap ? g_item_cap * 2 : 32;
+        ShapeItem *np = (ShapeItem *)realloc(g_items, (size_t)nc * sizeof(ShapeItem));
+        if (!np) return -1;
+        g_items = np; g_item_cap = nc;
+    }
+    {
+        ShapeItem *it = &g_items[g_item_count];
+        strncpy(it->name, name, sizeof(it->name) - 1);
+        it->name[sizeof(it->name) - 1] = '\0';
+        it->analytic = analytic;
+        it->mesh = mesh;
+    }
+    return g_item_count++;
+}
+
+static int find_item(const char *name) {
+    int i;
+    for (i = 0; i < g_item_count; ++i)
+        if (_stricmp(g_items[i].name, name) == 0) return i;
+    return -1;
+}
+
+/* Map a CLI alias to the canonical built-in name (or pass the name through). */
+static const char *canonical_name(const char *name) {
+    static const struct { const char *key, *canon; } t[] = {
+        { "cube", "cube" }, { "cubus", "cube" }, { "box", "cube" },
+        { "cylinder", "cylinder" }, { "cyl", "cylinder" },
+        { "diamond", "diamond" }, { "octahedron", "diamond" }, { "gem", "diamond" },
+        { "sphere", "sphere" }, { "ball", "sphere" },
+        { "stego", "stego" }, { "stegosaurus", "stego" }, { "dinosaur", "stego" },
+        { "f1", "f1" }, { "formula", "f1" }, { "formula1", "f1" }, { "race", "f1" },
+        { "companion", "companion" }, { "companioncube", "companion" }, { "portal", "companion" },
+        { "maus", "maus" }, { "mouse", "maus" },
+        { "fish", "fish" }, { "trout", "fish" }, { "forelle", "fish" },
+        { "kebab", "kebab" }, { "doner", "kebab" }, { "doener", "kebab" },
+        { "berlin", "berlin" }, { "tor", "berlin" }, { "brandenburg", "berlin" }, { "gate", "berlin" },
+        { "china", "china" }, { "tiananmen", "china" }, { "tankman", "china" }, { "tank", "china" }
+    };
+    size_t i;
+    for (i = 0; i < sizeof(t) / sizeof(t[0]); ++i)
+        if (_stricmp(name, t[i].key) == 0) return t[i].canon;
+    return name;
+}
+
+static void select_index(int i) {
+    ShapeItem *it;
+    if (g_item_count == 0) return;
+    i %= g_item_count;
+    if (i < 0) i += g_item_count;
+    g_item_index = i;
+    it = &g_items[i];
+    strncpy(g_shape_name_buf, it->name, sizeof(g_shape_name_buf) - 1);
+    g_shape_name_buf[sizeof(g_shape_name_buf) - 1] = '\0';
+    g_shattered = 0;
+    if (it->mesh) { g_analytic = -1; g_mesh = it->mesh; lru_touch(it->mesh); }
+    else          { g_analytic = it->analytic; g_mesh = NULL; }
+}
+
+static int select_by_name(const char *name) {
+    int i = find_item(canonical_name(name));
+    if (i < 0) return 0;
+    select_index(i);
+    return 1;
+}
+
+static void build_registry(void) {
+    items_add("cube",      SH_CUBE,     NULL);
+    items_add("cylinder",  SH_CYLINDER, NULL);
+    items_add("diamond",   SH_DIAMOND,  NULL);
+    items_add("sphere",    SH_SPHERE,   NULL);
+    items_add("stego",      -1, &g_mesh_stego);
+    items_add("f1",         -1, &g_mesh_f1);
+    items_add("companion",  -1, &g_mesh_comp);
+    items_add("maus",       -1, &g_mesh_maus);
+    items_add("fish",       -1, &g_mesh_fish);
+    items_add("kebab",      -1, &g_mesh_kebab);
+    items_add("berlin",     -1, &g_mesh_berlin);
+    items_add("china",      -1, &g_mesh_china);
 }
 
 static double shape_sdf(v3 q) {
-    switch (g_shape) {
+    switch (g_analytic) {
     case SH_SPHERE:
         return v3_len(q) - 1.0;
 
@@ -427,9 +553,6 @@ static double shape_sdf(v3 q) {
         const double s = 1.20;
         return (fabs(q.x) + fabs(q.y) + fabs(q.z) - s) / 1.7320508075688772;
     }
-
-    case SH_STEGO:
-        return 1e9; /* the stego is a triangle mesh, not an implicit surface */
     }
     return 1e9;
 }
@@ -543,14 +666,16 @@ static double shade_ray(double hx, double vz) {
     }
 }
 
-/* 2x2 supersampled luminance for one character cell. */
+/* 2x2 supersampled luminance for one character cell (1x for heavy meshes). */
 static double shade_cell(double cx, double cy, int cols, int rows) {
-    double ox = 0.5 / (double)cols;
-    double oy = 0.5 / (double)rows;
-    double a = shade_ray(cx - ox, cy - oy);
-    double b = shade_ray(cx + ox, cy - oy);
-    double c = shade_ray(cx - ox, cy + oy);
-    double d = shade_ray(cx + ox, cy + oy);
+    double ox, oy, a, b, c, d;
+    if (!g_super) return shade_ray(cx, cy);
+    ox = 0.5 / (double)cols;
+    oy = 0.5 / (double)rows;
+    a = shade_ray(cx - ox, cy - oy);
+    b = shade_ray(cx + ox, cy - oy);
+    c = shade_ray(cx - ox, cy + oy);
+    d = shade_ray(cx + ox, cy + oy);
     return (a + b + c + d) * 0.25;
 }
 
@@ -562,6 +687,7 @@ static void render_grid(char *grid, int cols, int rows) {
     int r, c;
 
     g_mesh_scale = g_mesh ? mesh_scale(g_mesh, aspect) : 1.0;
+    g_super = (g_mesh && g_mesh->ntri > SUPER_TRIS) ? 0 : 1;
 
     for (r = 0; r < rows; ++r) {
         double ndc_y = 1.0 - ((double)r + 0.5) / (double)rows * 2.0;
@@ -597,6 +723,11 @@ static void draw_hud(char *grid, int cols, int rows) {
     n = (int)strlen(hud);
     if (n > cols) n = cols;
     for (i = 0; i < n; ++i) grid[i] = hud[i];
+    if (g_model_msg[0]) {                 /* show the last model notice on line 2 */
+        int len = (int)strlen(g_model_msg);
+        if (len > cols) len = cols;
+        if (rows > 1) for (i = 0; i < len; ++i) grid[cols + i] = g_model_msg[i];
+    }
     (void)rows;
 }
 
@@ -744,6 +875,303 @@ static int console_size(HANDLE h, int *cols, int *rows) {
     return 1;
 }
 
+/* -------------------------------------------------------------- user models
+ * Files dropped into the "models" folder next to the exe are loaded and added
+ * to the shape list. The folder is polled; .stl/.obj/.ply are supported, with
+ * an optional "<name>.json" sidecar (up/yaw/pitch/elev/zoom/name).
+ */
+
+typedef struct {
+    int    up;        /* 0 = z, 1 = y, 2 = x */
+    double yaw, pitch, elev, zoom;
+    char   name[64];
+    int    has_name;
+} ModelMeta;
+
+typedef struct {
+    wchar_t            path[MAX_PATH];
+    wchar_t            wname[MAX_PATH];
+    unsigned long long mtime, size;
+} DirEnt;
+
+static wchar_t g_models_dir[MAX_PATH] = L"";
+static char    g_filesig[8192] = "";
+static int     g_filesig_valid = 0;
+
+static void meta_defaults(ModelMeta *m) {
+    m->up = 0; m->yaw = 0; m->pitch = 0; m->elev = 15.0; m->zoom = 1.0;
+    m->name[0] = '\0'; m->has_name = 0;
+}
+
+/* ---- tiny JSON value lookup (flat object, no nesting) ------------------- */
+static const char *json_find(const char *buf, const char *key) {
+    char pat[64];
+    const char *p;
+    _snprintf(pat, sizeof(pat), "\"%s\"", key);
+    p = strstr(buf, pat);
+    if (!p) return NULL;
+    p += strlen(pat);
+    p = strchr(p, ':');
+    if (!p) return NULL;
+    ++p;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') ++p;
+    return p;
+}
+static int json_num(const char *buf, const char *key, double *out) {
+    const char *v = json_find(buf, key);
+    char *end;
+    if (!v) return 0;
+    *out = strtod(v, &end);
+    return end != v;
+}
+static int json_str(const char *buf, const char *key, char *out, int cap) {
+    const char *v = json_find(buf, key);
+    int i = 0;
+    if (!v) return 0;
+    if (*v == '"') ++v;
+    while (*v && *v != '"' && *v != ',' && *v != '}' && *v != '\r' && *v != '\n' && i < cap - 1)
+        out[i++] = *v++;
+    while (i > 0 && out[i - 1] == ' ') --i;
+    out[i] = '\0';
+    return 1;
+}
+
+static void meta_read(const wchar_t *model_path, ModelMeta *m) {
+    wchar_t jp[MAX_PATH];
+    const wchar_t *dot;
+    HANDLE h;
+    DWORD sz, got;
+    char *buf;
+
+    wcscpy(jp, model_path);
+    dot = wcsrchr(jp, L'.');
+    if (dot) wcscpy((wchar_t *)dot, L".json");
+    else return;
+    h = CreateFileW(jp, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    sz = GetFileSize(h, NULL);
+    if (sz == 0 || sz > 65536) { CloseHandle(h); return; }
+    buf = (char *)malloc(sz + 1);
+    if (!buf) { CloseHandle(h); return; }
+    ReadFile(h, buf, sz, &got, NULL);
+    buf[got] = '\0';
+    CloseHandle(h);
+    {
+        double d;
+        char s[64];
+        if (json_str(buf, "up", s, sizeof(s))) {
+            if (_stricmp(s, "y") == 0) m->up = 1;
+            else if (_stricmp(s, "x") == 0) m->up = 2;
+            else m->up = 0;
+        }
+        if (json_num(buf, "yaw", &d))   m->yaw = d;
+        if (json_num(buf, "pitch", &d)) m->pitch = d;
+        if (json_num(buf, "elev", &d))  m->elev = d;
+        if (json_num(buf, "zoom", &d))  m->zoom = d;
+        if (json_str(buf, "name", s, sizeof(s))) {
+            strncpy(m->name, s, sizeof(m->name) - 1);
+            m->name[sizeof(m->name) - 1] = '\0';
+            m->has_name = 1;
+        }
+    }
+    free(buf);
+}
+
+static v3 rot_y(v3 p, double a) {
+    double c = cos(a), s = sin(a);
+    return v3_make(p.x * c + p.z * s, p.y, -p.x * s + p.z * c);
+}
+
+/* Transform, centre and scale a RawMesh into an owned MeshDef. Steals rm->tris. */
+static MeshDef *make_mesh(RawMesh *rm, const ModelMeta *meta) {
+    MeshDef *m;
+    float *verts;
+    double mn[3] = { 1e30, 1e30, 1e30 }, mx[3] = { -1e30, -1e30, -1e30 };
+    double c[3], maxext, scale;
+    int i, k;
+
+    if (rm->nvert <= 0 || rm->ntri <= 0) return NULL;
+    verts = (float *)malloc(sizeof(float) * 3 * (size_t)rm->nvert);
+    if (!verts) return NULL;
+    for (i = 0; i < rm->nvert; ++i) {
+        v3 v = v3_make(rm->verts[i * 3 + 0], rm->verts[i * 3 + 1], rm->verts[i * 3 + 2]);
+        if (meta->up == 1) v = rot_x(v, PI / 2.0);
+        else if (meta->up == 2) v = rot_y(v, -PI / 2.0);
+        v = rot_z(v, meta->yaw * (PI / 180.0));
+        v = rot_x(v, meta->pitch * (PI / 180.0));
+        verts[i * 3 + 0] = (float)v.x;
+        verts[i * 3 + 1] = (float)v.y;
+        verts[i * 3 + 2] = (float)v.z;
+        for (k = 0; k < 3; ++k) {
+            double val = (&v.x)[k];
+            if (val < mn[k]) mn[k] = val;
+            if (val > mx[k]) mx[k] = val;
+        }
+    }
+    for (k = 0; k < 3; ++k) c[k] = (mn[k] + mx[k]) * 0.5;
+    maxext = mx[0] - mn[0];
+    if (mx[1] - mn[1] > maxext) maxext = mx[1] - mn[1];
+    if (mx[2] - mn[2] > maxext) maxext = mx[2] - mn[2];
+    if (maxext <= 1e-9) { free(verts); return NULL; }
+    scale = 2.0 / maxext;
+    for (i = 0; i < rm->nvert; ++i) {
+        verts[i * 3 + 0] = (float)((verts[i * 3 + 0] - c[0]) * scale);
+        verts[i * 3 + 1] = (float)((verts[i * 3 + 1] - c[1]) * scale);
+        verts[i * 3 + 2] = (float)((verts[i * 3 + 2] - c[2]) * scale);
+    }
+
+    m = (MeshDef *)calloc(1, sizeof(MeshDef));
+    if (!m) { free(verts); return NULL; }
+    m->verts  = verts;
+    m->tris   = rm->tris; rm->tris = NULL;      /* take ownership */
+    m->nvert  = rm->nvert;
+    m->ntri   = rm->ntri;
+    m->elev   = (meta->elev > 0.0 && meta->elev < 89.0) ? meta->elev : 15.0;
+    m->zoom   = (meta->zoom > 0.01 && meta->zoom < 100.0) ? meta->zoom : 1.0;
+    m->owned  = 1;
+    m->built  = 0;
+    return m;
+}
+
+static void stem_of(const wchar_t *name, char *out, int cap) {
+    wchar_t w[64];
+    int i = 0;
+    while (name[i] && name[i] != L'.' && i < 63) { w[i] = name[i]; ++i; }
+    w[i] = L'\0';
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, out, cap, NULL, NULL);
+}
+
+static MeshDef *load_model_mesh(const wchar_t *path, const char *stem,
+                                char *disp, int disp_cap, char *err, int errsz) {
+    RawMesh rm;
+    ModelMeta meta;
+    MeshDef *m;
+
+    if (!loader_load(path, MAX_TRIS, &rm, err, errsz)) return NULL;
+    meta_defaults(&meta);
+    meta_read(path, &meta);
+    m = make_mesh(&rm, &meta);
+    free(rm.verts);
+    free(rm.tris);
+    if (!m) { strncpy(err, "degenerate or empty mesh", (size_t)errsz - 1); err[errsz - 1] = '\0'; return NULL; }
+    if (meta.has_name) { strncpy(disp, meta.name, (size_t)disp_cap - 1); }
+    else               { strncpy(disp, stem, (size_t)disp_cap - 1); }
+    disp[disp_cap - 1] = '\0';
+    return m;
+}
+
+static void unique_name(char *buf, int cap) {
+    char base[64];
+    int n = 2;
+    strncpy(base, buf, sizeof(base) - 1); base[sizeof(base) - 1] = '\0';
+    while (find_item(buf) >= 0) {
+        _snprintf(buf, (size_t)cap, "%s-%d", base, n++);
+    }
+}
+
+static void models_clear_loaded(void) {
+    int i;
+    lru_clear();                              /* release any BVHs first */
+    for (i = g_item_count - 1; i >= 0; --i) {
+        if (g_items[i].mesh && g_items[i].mesh->owned) {
+            mesh_destroy(g_items[i].mesh);
+            memmove(&g_items[i], &g_items[i + 1],
+                    (size_t)(g_item_count - i - 1) * sizeof(ShapeItem));
+            --g_item_count;
+        }
+    }
+}
+
+static int dir_cmp(const void *a, const void *b) {
+    return _wcsicmp(((const DirEnt *)a)->wname, ((const DirEnt *)b)->wname);
+}
+
+static void models_init(void) {
+    wchar_t exe[MAX_PATH];
+    wchar_t *p;
+    DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) {
+        wcscpy(g_models_dir, L"models");
+    } else {
+        p = wcsrchr(exe, L'\\');
+        if (p) *p = L'\0';
+        _snwprintf(g_models_dir, MAX_PATH, L"%ls\\models", exe);
+    }
+    CreateDirectoryW(g_models_dir, NULL);
+}
+
+static void models_poll(int force) {
+    DirEnt ents[256];
+    int ne = 0, i;
+    wchar_t pat[MAX_PATH];
+    WIN32_FIND_DATAW fd;
+    HANDLE h;
+    char sig[8192];
+    int sp = 0;
+
+    _snwprintf(pat, MAX_PATH, L"%ls\\*", g_models_dir);
+    h = FindFirstFileW(pat, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            const wchar_t *ext;
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            ext = wcsrchr(fd.cFileName, L'.');
+            if (!ext) continue;
+            if (_wcsicmp(ext, L".stl") && _wcsicmp(ext, L".obj") && _wcsicmp(ext, L".ply")) continue;
+            if (ne < (int)(sizeof(ents) / sizeof(ents[0]))) {
+                DirEnt *d = &ents[ne++];
+                _snwprintf(d->path, MAX_PATH, L"%ls\\%ls", g_models_dir, fd.cFileName);
+                wcsncpy(d->wname, fd.cFileName, MAX_PATH - 1); d->wname[MAX_PATH - 1] = L'\0';
+                d->mtime = ((unsigned long long)fd.ftLastWriteTime.dwHighDateTime << 32)
+                         | fd.ftLastWriteTime.dwLowDateTime;
+                d->size  = ((unsigned long long)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+            }
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    qsort(ents, (size_t)ne, sizeof(DirEnt), dir_cmp);
+
+    sig[0] = '\0';
+    for (i = 0; i < ne; ++i) {
+        int k = _snprintf(sig + sp, sizeof(sig) - (size_t)sp, "%ls|%llu|%llu;",
+                          ents[i].wname, ents[i].mtime, ents[i].size);
+        if (k < 0) { sp = (int)sizeof(sig) - 1; break; }
+        sp += k;
+    }
+    sig[sizeof(sig) - 1] = '\0';
+
+    if (!force && g_filesig_valid && strcmp(sig, g_filesig) == 0) return;
+
+    g_model_msg[0] = '\0';
+    {
+        char keep[64];
+        strncpy(keep, g_shape_name, sizeof(keep) - 1); keep[sizeof(keep) - 1] = '\0';
+
+        models_clear_loaded();
+        for (i = 0; i < ne && i < MAX_MODELS; ++i) {
+            char stem[64], disp[64], err[128];
+            MeshDef *m;
+            stem_of(ents[i].wname, stem, sizeof(stem));
+            err[0] = '\0';
+            m = load_model_mesh(ents[i].path, stem, disp, sizeof(disp), err, sizeof(err));
+            if (!m) {
+                _snprintf(g_model_msg, sizeof(g_model_msg), "models: %ls: %s", ents[i].wname, err);
+                continue;
+            }
+            unique_name(disp, sizeof(disp));
+            items_add(disp, -1, m);
+        }
+        if (ne > MAX_MODELS)
+            _snprintf(g_model_msg, sizeof(g_model_msg), "models: only first %d files loaded", MAX_MODELS);
+
+        strncpy(g_filesig, sig, sizeof(g_filesig) - 1);
+        g_filesig[sizeof(g_filesig) - 1] = '\0';
+        g_filesig_valid = 1;
+
+        if (!select_by_name(keep)) select_index(0);
+    }
+}
+
 /* --------------------------------------------------------------- command line */
 
 static void print_help(void) {
@@ -755,7 +1183,8 @@ static void print_help(void) {
         "Options:\n"
         "  -s, --shape <name>   Shape to render: cube | cylinder | diamond |\n"
         "                       sphere | stego | f1 | companion | maus |\n"
-        "                       fish | kebab | berlin | china (default: cube)\n"
+        "                       fish | kebab | berlin | china, or a model\n"
+        "                       name from the models/ folder (default: cube)\n"
         "  -h, --help           Show this help and exit\n"
         "  -v, --version        Show version and exit\n"
         "      --snapshot       Render a single frame to stdout and exit\n"
@@ -771,61 +1200,17 @@ static void print_help(void) {
         "                       in %d deg steps (max %d deg)\n"
         "  ENTER                Shatter the object; press again to rebuild it\n"
         "  SPACE                Switch to the next shape (insertion order)\n"
-        "  q                    Quit\n",
+        "  R                    Rescan the models/ folder\n"
+        "  q                    Quit\n\n"
+        "Drop .stl/.obj/.ply files into the 'models' folder next to this\n"
+        "executable; they are detected automatically and added to the cycle.\n",
         APP_NAME, APP_VERSION,
         (int)SPEED_STEP, (int)MAX_SPEED, (int)SPEED_STEP, (int)MIN_SPEED,
         (int)TILT_STEP, (int)MAX_TILT);
 }
 
-static int set_shape(const char *name) {
-    struct { const char *key; Shape shape; const char *canon; } table[] = {
-        { "cube",       SH_CUBE,     "cube"     },
-        { "cubus",      SH_CUBE,     "cube"     },
-        { "box",        SH_CUBE,     "cube"     },
-        { "cylinder",   SH_CYLINDER, "cylinder" },
-        { "cyl",        SH_CYLINDER, "cylinder" },
-        { "diamond",    SH_DIAMOND,  "diamond"  },
-        { "octahedron", SH_DIAMOND,  "diamond"  },
-        { "gem",        SH_DIAMOND,  "diamond"  },
-        { "sphere",     SH_SPHERE,   "sphere"   },
-        { "ball",       SH_SPHERE,   "sphere"   },
-        { "stego",      SH_STEGO,     "stego"     },
-        { "stegosaurus",SH_STEGO,     "stego"     },
-        { "dinosaur",   SH_STEGO,     "stego"     },
-        { "f1",         SH_F1,        "f1"        },
-        { "formula",    SH_F1,        "f1"        },
-        { "formula1",   SH_F1,        "f1"        },
-        { "race",       SH_F1,        "f1"        },
-        { "companion",  SH_COMPANION, "companion" },
-        { "companioncube", SH_COMPANION, "companion" },
-        { "portal",     SH_COMPANION, "companion" },
-        { "maus",       SH_MAUS,      "maus"      },
-        { "mouse",      SH_MAUS,      "maus"      },
-        { "fish",       SH_FISH,      "fish"      },
-        { "trout",      SH_FISH,      "fish"      },
-        { "forelle",    SH_FISH,      "fish"      },
-        { "kebab",      SH_KEBAB,     "kebab"     },
-        { "doner",      SH_KEBAB,     "kebab"     },
-        { "doener",     SH_KEBAB,     "kebab"     },
-        { "berlin",     SH_BERLIN,    "berlin"    },
-        { "tor",        SH_BERLIN,    "berlin"    },
-        { "brandenburg",SH_BERLIN,    "berlin"    },
-        { "gate",       SH_BERLIN,    "berlin"    },
-        { "china",      SH_CHINA,     "china"     },
-        { "tiananmen",  SH_CHINA,     "china"     },
-        { "tankman",    SH_CHINA,     "china"     },
-        { "tank",       SH_CHINA,     "china"     }
-    };
-    size_t i;
-    for (i = 0; i < sizeof(table) / sizeof(table[0]); ++i) {
-        if (_stricmp(name, table[i].key) == 0) {
-            g_shape      = table[i].shape;
-            g_shape_name = table[i].canon;
-            return 1;
-        }
-    }
-    return 0;
-}
+/* Shape aliases are resolved by canonical_name() / select_by_name(). */
+
 
 /* Returns 1 on success, 0 to stop (help/version already handled). */
 static int parse_args(int argc, char **argv) {
@@ -876,12 +1261,10 @@ static int parse_args(int argc, char **argv) {
         }
     }
 
-    if (shape && !set_shape(shape)) {
-        fprintf(stderr,
-                "error: unknown shape '%s'\n"
-                "       valid shapes: cube, cylinder, diamond, sphere, stego, f1,\n"
-                "                     companion, maus, fish, kebab, berlin, china\n", shape);
-        return 0;
+    if (shape) {
+        strncpy(g_req_shape, shape, sizeof(g_req_shape) - 1);
+        g_req_shape[sizeof(g_req_shape) - 1] = '\0';
+        g_req_shape_set = 1;
     }
     return 1;
 }
@@ -911,10 +1294,24 @@ int main(int argc, char **argv) {
     char  *grid = NULL, *out = NULL;
     LARGE_INTEGER freq, now, last;
     double angle_deg;
+    double scan_acc = 0.0;
 
     if (!parse_args(argc, argv)) return 1;
 
-    select_shape(g_shape);
+    build_registry();
+    models_init();
+    models_poll(1);                    /* initial scan of the models folder */
+    if (g_req_shape_set) {
+        if (!select_by_name(g_req_shape)) {
+            int i;
+            fprintf(stderr, "error: unknown shape '%s'\n       available:", g_req_shape);
+            for (i = 0; i < g_item_count; ++i) fprintf(stderr, " %s", g_items[i].name);
+            fprintf(stderr, "\n");
+            return 1;
+        }
+    } else {
+        select_index(0);
+    }
 
     h_out = GetStdHandle(STD_OUTPUT_HANDLE);
     is_console = GetConsoleMode(h_out, &orig_mode) ? 1 : 0;
@@ -996,8 +1393,9 @@ int main(int argc, char **argv) {
             if (ch == 27 || ch == 'q' || ch == 'Q') {
                 g_running = 0;
             } else if (ch == ' ') {                /* SPACE: next shape */
-                g_shattered = 0;
-                select_shape((Shape)(((int)g_shape + 1) % N_SHAPES));
+                select_index(g_item_index + 1);
+            } else if (ch == 'r' || ch == 'R') {   /* R: rescan the models folder */
+                models_poll(1);
             } else if (ch == 13 || ch == 10) {     /* ENTER: shatter / rebuild */
                 if (grid && cols > 0) {
                     if (!g_shattered) {
@@ -1042,6 +1440,10 @@ int main(int argc, char **argv) {
         last = now;
         if (dt > 0.10) dt = 0.10;
         if (dt < 0.0)  dt = 0.0;
+
+        /* --- poll the models folder (~1 s) ---------------------------- */
+        scan_acc += dt;
+        if (scan_acc >= 1.0) { scan_acc = 0.0; models_poll(0); }
 
         /* --- update + render ------------------------------------------ */
         if (!g_shattered) {

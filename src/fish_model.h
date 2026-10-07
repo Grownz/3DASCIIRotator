@@ -72,7 +72,7 @@ static const float FISH_VERT[894] = {
   1.317095f,-0.103551f,0.049815f,1.317095f,-0.103551f,0.004725f,1.278153f,-0.106435f,-0.017819f,
 };
 
-static const unsigned short FISH_TRI[804] = {
+static const unsigned int FISH_TRI[804] = {
   2,3,0,0,1,2,6,7,4,4,5,6,
   10,11,8,8,9,10,12,13,9,9,8,12,
   14,15,5,5,4,14,16,17,1,1,0,16,

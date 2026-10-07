@@ -4,6 +4,22 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-10-07
+
+### Added
+- User-supplied models: drop `.stl`, `.obj` or `.ply` files into a `models/`
+  folder next to the executable and they are added to the `SPACE` cycle. The
+  folder is rescanned live (about once a second); `R` forces a rescan.
+- STL (binary + ASCII), OBJ and PLY (ASCII + binary little-endian) readers,
+  with a 128 MB / 500k-triangle cap and an LRU cache of the last three BVHs.
+- Optional per-model sidecar `<name>.json` (up axis, yaw, pitch, elevation,
+  zoom, display name).
+- Adaptive quality: meshes above ~100k triangles skip the 2x2 supersampling.
+
+### Changed
+- The shape list is dynamic now; `-s` also accepts names of loaded models.
+- Mesh indices are 32-bit, so meshes are no longer limited to 65k vertices.
+
 ## [0.1.0] - 2026-10-07
 
 ### Added

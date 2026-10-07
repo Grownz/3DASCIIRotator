@@ -10,10 +10,9 @@ native `.exe`.
 
 ## Download
 
-Prebuilt Windows x64 binaries are available on the
-[releases page](https://github.com/Grownz/3DASCIIRotator/releases/latest).
-Latest: [ascii3D.exe](https://github.com/Grownz/3DASCIIRotator/releases/download/v0.1.0/ascii3D.exe).
-No installer and no runtime are required.
+Prebuilt Windows x64 binaries are on the
+[releases page](https://github.com/Grownz/3DASCIIRotator/releases/latest)
+(latest asset: `ascii3D.exe`). No installer and no runtime are required.
 
 ## Features
 
@@ -29,8 +28,12 @@ No installer and no runtime are required.
   stegosaurus, a Formula-style race car, a companion cube, "Die Maus", a trout,
   a kebab, the Brandenburg Gate and a "Tank Man" scene (the latter eight are
   embedded, ray-traced triangle meshes — see *Third-party assets*).
-- **Cycle at runtime.** The shapes are kept in a fixed list in insertion order;
+- **Cycle at runtime.** The shapes are kept in a list in insertion order;
   press `SPACE` to switch to the next one without restarting.
+- **Bring your own models.** Drop `.stl`, `.obj` or `.ply` files into a
+  `models/` folder next to the executable; they are detected automatically
+  (live) and added to the `SPACE` cycle. An optional `<name>.json` sidecar can
+  set the up axis, rotation, zoom and display name.
 - **Always spinning.** The solid rotates around the vertical (z) axis at
   15 deg/s by default.
 - **Tiltable spin axis.** Press `Up` / `Down` to tip the spin axis away from or
@@ -74,7 +77,7 @@ build\ascii3D.exe -s cube
 
 | Option | Description |
 | --- | --- |
-| `-s`, `--shape <name>` | Shape to render: `cube`, `cylinder`, `diamond`, `sphere`, `stego`, `f1`, `companion`, `maus`, `fish`, `kebab`, `berlin`, `china` (default: `cube`). |
+| `-s`, `--shape <name>` | Shape to render: `cube`, `cylinder`, `diamond`, `sphere`, `stego`, `f1`, `companion`, `maus`, `fish`, `kebab`, `berlin`, `china`, or a model name from `models/` (default: `cube`). |
 | `-h`, `--help` | Show help and exit. |
 | `-v`, `--version` | Show the version and exit. |
 | `--angle <deg>` | Initial rotation angle in degrees (default: `0`). |
@@ -113,7 +116,40 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 | `Up` / `Down` | Tilt the spin axis away from / towards the viewer in 5 deg steps (maximum 90 deg). |
 | `Enter` | Shatter the solid; press again to rebuild it. |
 | `Space` | Switch to the next shape (insertion order). |
+| `R` | Rescan the `models/` folder now. |
 | `q` | Quit (convenience alias for `ESC`). |
+
+## Bring your own models
+
+Drop 3D files into a **`models/`** folder next to `ascii3D.exe` (created on
+first start). They are picked up automatically and appended after the built-in
+shapes, in alphabetical order; `SPACE` cycles through them and `R` forces a
+rescan.
+
+- **Formats:** STL (binary and ASCII), OBJ, PLY (ASCII and binary
+  little-endian). Convert anything else (e.g. glTF) to one of these first.
+- **Limits:** a file up to 128 MB and up to 500k triangles; larger files are
+  skipped with a message. Very heavy meshes (\(>100\)k triangles) drop the
+  2×2 supersampling to keep the frame rate up.
+- **Orientation:** models are assumed **Z-up** and centred/scaled
+  automatically. Anything else can be fixed with a sidecar.
+- **Sidecar (optional):** a `<name>.json` next to the model:
+
+  ```json
+  {
+    "up":    "z",
+    "yaw":   0,
+    "pitch": 0,
+    "elev":  15,
+    "zoom":  1.0,
+    "name":  "My Model"
+  }
+  ```
+
+  `up` is `z`, `y` or `x` (which model axis points up); `yaw`/`pitch` are extra
+  degrees; `elev` is the camera elevation for this model; `zoom` multiplies the
+  auto-fit scale; `name` overrides the display/CLI name.
+- The `models/` folder is git-ignored (your files stay out of the repository).
 
 ## How it works
 
@@ -136,12 +172,11 @@ the vertical `z` axis by integrating the current spin speed over real elapsed
 time, so the motion speed is independent of the frame rate. The `Up` / `Down`
 keys tilt that axis about the horizontal `x` axis.
 
-The `stego`, `f1`, `companion` and `maus` shapes are not analytic
-primitives: each is an embedded **triangle mesh** ray-traced with a
-bounding-volume hierarchy and shaded flat. The meshes are automatically
-scaled to fill the current view (accounting for perspective), and each uses a
-camera elevation that suits it. The stegosaurus keeps its sharp back plates
-and tail spikes; the F1 car its exposed wheels and wings.
+All other shapes are **triangle meshes** ray-traced with a bounding-volume
+hierarchy and shaded flat: the built-in models and any user-supplied models
+from `models/`. Each is centred and automatically scaled to fill the current
+view (accounting for perspective) with a camera elevation that suits it; very
+heavy meshes switch off the 2×2 supersampling to stay interactive.
 
 When you press `Enter`, the current characters are turned into particles with a
 small random outward kick. Each particle is integrated with gravity and air
@@ -152,7 +187,9 @@ settles into a shallow debris layer on the floor the object was resting on.
 
 ```
 3DASCIIRotator/
-  src/main.c            application source (single file)
+  src/main.c            application source (shapes, rendering, registry)
+  src/loader.c          STL / OBJ / PLY readers
+  src/loader.h          loader interface
   src/stego_model.h     embedded stegosaurus mesh (generated)
   src/f1_model.h        embedded F1 car mesh (generated)
   src/companion_model.h embedded companion cube mesh (generated)
@@ -162,6 +199,7 @@ settles into a shallow debris layer on the floor the object was resting on.
   src/berlin_model.h    embedded Brandenburg Gate mesh (generated)
   src/china_model.h     embedded "Tank Man" scene mesh (generated)
   docs/companion.gif    preview animation (generated)
+  docs/models-feature.md  design notes for user models
   tools/make_stego_model.py    regenerates src/stego_model.h
   tools/make_shape_models.py   regenerates the other model headers
   tools/make_preview_gif.py    regenerates docs/companion.gif
@@ -169,6 +207,9 @@ settles into a shallow debris layer on the floor the object was resting on.
   readme.md             this file
   changelog.md          version history
 ```
+
+A `models/` folder is created next to the built `ascii3D.exe` on first start;
+it is where user models go and is git-ignored.
 
 The generated headers are committed, so a normal build only needs MSVC. To
 regenerate them (needs Python 3 with numpy and trimesh; the stegosaurus
@@ -213,16 +254,16 @@ python tools\make_shape_models.py
   the Type 59 tank is original geometry. Both are baked by
   `tools/make_shape_models.py`.
 
-The meshes are baked into the C headers listed above; no model file is loaded
-at runtime.
+The built-in meshes are baked into the C headers listed above; user models are
+loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.1.0**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.0**. See [changelog.md](changelog.md) for details.
 
 ## Roadmap
 
-- `0.1.0` — open the GitHub repository and continue development there.
+- Later: more formats, model thumbnails, per-model sidecar presets.
 
 ## License
 
