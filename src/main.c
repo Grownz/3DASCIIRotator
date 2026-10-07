@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.4
+ * 3D ASCII Rotator - version 0.2.5
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -18,8 +18,11 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #define _CRT_SECURE_NO_WARNINGS
+#define _WIN32_WINNT 0x0601
 
 #include <windows.h>
+#include <mmsystem.h>
+#pragma comment(lib, "winmm.lib")
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,7 +45,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.4"
+#define APP_VERSION "0.2.5"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -98,6 +101,7 @@ static int          g_menu_scroll = 0;
 static int          g_menu_start = 0;              /* --menu (snapshot preview) */
 static int          g_lod_arg = -1;                /* --lod level (snapshot) */
 static int          g_bench = 0;                   /* --bench <frames>      */
+static int          g_target_fps = 60;             /* --fps (0 = unlimited) */
 
 /* --- status message (auto-hides), FPS HUD, shape colour, menu slider ----- */
 static int    g_show_fps = 0;
@@ -818,6 +822,70 @@ static double shade_cell(double cx, double cy, int cols, int rows) {
     return (a + b + c + d) * 0.25;
 }
 
+/* --------------------------------------------------------------- worker pool
+ * A small pool of persistent threads that block on an event between frames
+ * (no spin-wait, so the CPU stays idle when nothing is drawn) and split each
+ * render across the cores. Unlike OpenMP this adds no runtime DLL dependency.
+ */
+typedef void (*RowFn)(int r0, int r1, void *ctx);
+
+typedef struct { HANDLE start, done; int r0, r1; } PoolWorker;
+
+static PoolWorker   *g_pool = NULL;
+static int           g_pool_n = 0;
+static RowFn         g_job_fn = NULL;
+static void         *g_job_ctx = NULL;
+static volatile LONG g_pool_quit = 0;
+
+static DWORD WINAPI pool_thread(LPVOID p) {
+    PoolWorker *w = (PoolWorker *)p;
+    for (;;) {
+        WaitForSingleObject(w->start, INFINITE);
+        if (g_pool_quit) { SetEvent(w->done); return 0; }
+        g_job_fn(w->r0, w->r1, g_job_ctx);
+        SetEvent(w->done);
+    }
+}
+
+static void pool_ensure(void) {
+    static int tried = 0;
+    int cores, i;
+    if (tried) return;
+    tried = 1;
+    cores = (int)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    if (cores < 1) cores = 1;
+    if (cores > 16) cores = 16;
+    if (cores < 2) return;
+    g_pool = (PoolWorker *)calloc((size_t)(cores - 1), sizeof(PoolWorker));
+    if (!g_pool) return;
+    for (i = 0; i < cores - 1; ++i) {
+        HANDLE h;
+        g_pool[i].start = CreateEventW(NULL, FALSE, FALSE, NULL);
+        g_pool[i].done  = CreateEventW(NULL, FALSE, FALSE, NULL);
+        if (!g_pool[i].start || !g_pool[i].done) break;
+        h = CreateThread(NULL, 0, pool_thread, &g_pool[i], 0, NULL);
+        if (!h) break;
+        CloseHandle(h);
+    }
+    g_pool_n = i;
+}
+
+/* Run `fn` over the rows, splitting them across the pool; the caller also
+ * renders one share so all cores stay busy during a frame. */
+static void pool_run(RowFn fn, void *ctx, int rows) {
+    int i, parts, n = g_pool_n;
+    if (n <= 0 || rows <= 0) { fn(0, rows, ctx); return; }
+    parts = n + 1;
+    for (i = 0; i < n; ++i) {
+        g_pool[i].r0 = rows * i / parts;
+        g_pool[i].r1 = rows * (i + 1) / parts;
+    }
+    g_job_fn = fn; g_job_ctx = ctx;
+    for (i = 0; i < n; ++i) SetEvent(g_pool[i].start);
+    fn(rows * n / parts, rows, ctx);
+    for (i = 0; i < n; ++i) WaitForSingleObject(g_pool[i].done, INFINITE);
+}
+
 /* ----------------------------------------------------------------- rendering */
 
 /* Map a luminance to a ramp character. */
@@ -828,79 +896,81 @@ static char lum_char(double lum) {
     return RAMP[idx];
 }
 
+/* Per-frame render context handed to the worker pool. `pass` selects the
+ * sampling strategy (see render_grid). */
+typedef struct {
+    char  *grid;
+    int    cols, rows;
+    double aspect;
+    int    pass;   /* 0 = 1x, 3 = fixed 2x2 (mesh), 1/2 = adaptive passes */
+} RenderCtx;
+
+static void render_rows(int r0, int r1, void *vctx) {
+    RenderCtx *c = (RenderCtx *)vctx;
+    int r, cc;
+    for (r = r0; r < r1; ++r) {
+        double vz = (1.0 - ((double)r + 0.5) / (double)c->rows * 2.0) * VIEW_HALF;
+        for (cc = 0; cc < c->cols; ++cc) {
+            double hx = (((double)cc + 0.5) / (double)c->cols * 2.0 - 1.0) * VIEW_HALF * c->aspect;
+            size_t idx = (size_t)r * c->cols + cc;
+            double L;
+            if (c->pass == 0) {
+                c->grid[idx] = lum_char(shade_ray(hx, vz));
+            } else if (c->pass == 3) {
+                c->grid[idx] = lum_char(shade_cell(hx, vz, c->cols, c->rows));
+            } else if (c->pass == 1) {
+                L = shade_ray(hx, vz);
+                if (g_lum) g_lum[idx] = L;
+                c->grid[idx] = lum_char(L);
+            } else {                                     /* pass 2: adaptive edges */
+                L = g_lum[idx];
+                if ((cc > 0               && fabs(L - g_lum[idx - 1]) > SUPER_TH) ||
+                    (cc < c->cols - 1     && fabs(L - g_lum[idx + 1]) > SUPER_TH) ||
+                    (r > 0                && fabs(L - g_lum[idx - c->cols]) > SUPER_TH) ||
+                    (r < c->rows - 1      && fabs(L - g_lum[idx + c->cols]) > SUPER_TH))
+                    L = shade_cell(hx, vz, c->cols, c->rows);
+                c->grid[idx] = lum_char(L);
+            }
+        }
+    }
+}
+
 /* Fill a cols*rows character grid with the current shape. */
 static void render_grid(char *grid, int cols, int rows) {
     double aspect = CHAR_ASPECT * (double)cols / (double)rows;
-    int r;
+    RenderCtx ctx;
 
+    pool_ensure();
     update_transform();
     update_camera();
     g_mesh_scale = g_mesh ? mesh_scale(g_mesh, aspect) : 1.0;
     g_super = (g_mesh && g_mesh->ntri > SUPER_TRIS) ? 0 : 1;
 
-    if (!g_super) {                        /* heavy mesh: one sample per cell */
-#pragma omp parallel for schedule(static)
-        for (r = 0; r < rows; ++r) {
-            int c;
-            double vz = (1.0 - ((double)r + 0.5) / (double)rows * 2.0) * VIEW_HALF;
-            for (c = 0; c < cols; ++c) {
-                double hx = (((double)c + 0.5) / (double)cols * 2.0 - 1.0) * VIEW_HALF * aspect;
-                grid[(size_t)r * cols + c] = lum_char(shade_ray(hx, vz));
-            }
-        }
+    ctx.grid = grid; ctx.cols = cols; ctx.rows = rows; ctx.aspect = aspect;
+
+    if (!g_super) {                       /* heavy mesh: one sample per cell */
+        ctx.pass = 0;
+        pool_run(render_rows, &ctx, rows);
+        return;
+    }
+    if (g_mesh) {                         /* small mesh: fixed 2x2 */
+        ctx.pass = 3;
+        pool_run(render_rows, &ctx, rows);
         return;
     }
 
     lum_ensure(cols * rows);
-
-    /* Triangle meshes have many hard facet edges, so adaptive sampling does not
-     * pay off there; keep the fixed 2x2 rule for the small ones. */
-    if (g_mesh) {
-#pragma omp parallel for schedule(static)
-        for (r = 0; r < rows; ++r) {
-            int c;
-            double vz = (1.0 - ((double)r + 0.5) / (double)rows * 2.0) * VIEW_HALF;
-            for (c = 0; c < cols; ++c) {
-                double hx = (((double)c + 0.5) / (double)cols * 2.0 - 1.0) * VIEW_HALF * aspect;
-                grid[(size_t)r * cols + c] = lum_char(shade_cell(hx, vz, cols, rows));
-            }
-        }
+    if (!g_lum) {                         /* allocation failed: plain 1x */
+        ctx.pass = 0;
+        pool_run(render_rows, &ctx, rows);
         return;
     }
 
-    /* pass 1: one sample per cell */
-#pragma omp parallel for schedule(static)
-    for (r = 0; r < rows; ++r) {
-        int c;
-        double vz = (1.0 - ((double)r + 0.5) / (double)rows * 2.0) * VIEW_HALF;
-        for (c = 0; c < cols; ++c) {
-            double hx = (((double)c + 0.5) / (double)cols * 2.0 - 1.0) * VIEW_HALF * aspect;
-            double lum = shade_ray(hx, vz);
-            if (g_lum) g_lum[(size_t)r * cols + c] = lum;
-            grid[(size_t)r * cols + c] = lum_char(lum);   /* fallback if no buffer */
-        }
-    }
-    if (!g_lum) return;
-
-    /* pass 2: 2x2 supersample only cells beside a strong contrast edge */
-#pragma omp parallel for schedule(static)
-    for (r = 0; r < rows; ++r) {
-        int c;
-        double vz = (1.0 - ((double)r + 0.5) / (double)rows * 2.0) * VIEW_HALF;
-        for (c = 0; c < cols; ++c) {
-            double L = g_lum[(size_t)r * cols + c];
-            int edge = 0;
-            if (c > 0        && fabs(L - g_lum[(size_t)r * cols + (c - 1)]) > SUPER_TH) edge = 1;
-            if (c < cols - 1 && fabs(L - g_lum[(size_t)r * cols + (c + 1)]) > SUPER_TH) edge = 1;
-            if (r > 0        && fabs(L - g_lum[(size_t)(r - 1) * cols + c]) > SUPER_TH) edge = 1;
-            if (r < rows - 1 && fabs(L - g_lum[(size_t)(r + 1) * cols + c]) > SUPER_TH) edge = 1;
-            if (edge) {
-                double hx = (((double)c + 0.5) / (double)cols * 2.0 - 1.0) * VIEW_HALF * aspect;
-                L = shade_cell(hx, vz, cols, rows);
-            }
-            grid[(size_t)r * cols + c] = lum_char(L);
-        }
-    }
+    /* analytic SDF: adaptive 2x2 (pass 1 = 1 sample, pass 2 = edges only) */
+    ctx.pass = 1;
+    pool_run(render_rows, &ctx, rows);
+    ctx.pass = 2;
+    pool_run(render_rows, &ctx, rows);
 }
 
 /* Overlay the status line in the top-left corner. */
@@ -1596,7 +1666,8 @@ static void print_help(void) {
         "      --sim <sec>      With --shatter: seconds to simulate (default: 3)\n"
         "      --menu           With --snapshot: draw the model list (preview)\n"
         "      --lod <level>    With --snapshot: apply an LOD level (0..%d)\n"
-        "      --bench <frames> Benchmark offscreen rendering and exit\n\n"
+        "      --bench <frames> Benchmark offscreen rendering and exit\n"
+        "      --fps <n>        Frame-rate cap for interactive mode (default 60)\n\n"
         "Controls (interactive):\n"
         "  ESC                  Quit\n"
         "  +                    Increase spin by %d deg/s (max %d deg/s)\n"
@@ -1654,6 +1725,14 @@ static int parse_args(int argc, char **argv) {
                 return 0;
             }
             g_bench = atoi(argv[++i]);
+        } else if (_stricmp(a, "--fps") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "error: --fps requires a value\n");
+                return 0;
+            }
+            g_target_fps = atoi(argv[++i]);
+            if (g_target_fps < 0) g_target_fps = 0;
+            if (g_target_fps > 240) g_target_fps = 240;
         } else if (_stricmp(a, "-s") == 0 || _stricmp(a, "--shape") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "error: %s requires a value\n", a);
@@ -1714,6 +1793,25 @@ static void write_all(HANDLE h, int is_console, const char *buf, int len) {
     }
 }
 
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+static HANDLE g_wait_timer = NULL;
+
+/* Sleep for `sec` seconds with sub-millisecond accuracy (falls back to Sleep). */
+static void precise_sleep(double sec) {
+    if (sec <= 0.0) return;
+    if (g_wait_timer) {
+        LARGE_INTEGER due;
+        due.QuadPart = -(LONGLONG)(sec * 1.0e7);   /* relative, 100 ns units */
+        if (SetWaitableTimer(g_wait_timer, &due, 0, NULL, NULL, FALSE)) {
+            WaitForSingleObject(g_wait_timer, INFINITE);
+            return;
+        }
+    }
+    Sleep((DWORD)(sec * 1000.0 + 0.5));
+}
+
 /* Offscreen render benchmark: renders `frames` frames over one full turn and
  * reports the average time per frame (no console required). */
 static int run_bench(int frames) {
@@ -1751,7 +1849,7 @@ int main(int argc, char **argv) {
     DWORD  orig_mode = 0, in_mode = 0;
     int    is_console, cols = 0, rows = 0;
     char  *grid = NULL, *out = NULL;
-    LARGE_INTEGER freq, now, last;
+    LARGE_INTEGER freq, now, last, frame_start;
     double angle_deg;
     double scan_acc = 0.0;
 
@@ -1845,9 +1943,14 @@ int main(int argc, char **argv) {
     rng_seed((unsigned int)GetTickCount());
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&last);
+    g_wait_timer = CreateWaitableTimerExW(NULL, NULL,
+                        CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    timeBeginPeriod(1);   /* ~1 ms Sleep granularity (fallback path) */
 
     while (g_running) {
         double dt;
+
+        QueryPerformanceCounter(&frame_start);
 
         /* --- input: keys + mouse wheel -------------------------------- */
         {
@@ -1998,10 +2101,20 @@ int main(int argc, char **argv) {
             write_all(h_out, is_console, out, (int)(o - out));
         }
 
-        Sleep(16); /* ~60 fps cap; rotation is time-based so this stays smooth */
+        /* --- frame limiter: only sleep if we are ahead of the target ----- */
+        if (g_target_fps > 0) {
+            LARGE_INTEGER t;
+            double spent, wait;
+            QueryPerformanceCounter(&t);
+            spent = (double)(t.QuadPart - frame_start.QuadPart) / (double)freq.QuadPart;
+            wait  = 1.0 / (double)g_target_fps - spent;
+            if (wait > 0.0005) precise_sleep(wait);
+        }
     }
 
     /* ---- restore the console ----------------------------------------- */
+    if (g_wait_timer) CloseHandle(g_wait_timer);
+    timeEndPeriod(1);
     write_all(h_out, is_console, "\x1b[0m\x1b[?25h\x1b[?1049l", -1);
     SetConsoleMode(h_out, orig_mode);
     SetConsoleMode(h_in, in_mode);

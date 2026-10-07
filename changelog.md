@@ -4,6 +4,21 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.5] - 2026-10-08
+
+### Added
+- `--fps <n>` frame-rate cap for interactive mode (default `60`, `0` = uncapped).
+
+### Changed
+- Replaced OpenMP with a lightweight **Win32 worker pool** whose threads block
+  on an event between frames. This removes the busy-wait that pinned every core
+  at 100% while idle, and drops the `VCOMP140.DLL` dependency (the binary now
+  only needs `KERNEL32`/`WINMM`).
+- Removed the fixed `Sleep(16)` cap. The interactive loop now targets the
+  configured frame rate with a high-resolution waitable timer and only sleeps
+  when it is ahead of the target, so the console is driven as fast as it can
+  display (up to the cap) and CPU stays low.
+
 ## [0.2.4] - 2026-10-08
 
 ### Added

@@ -57,10 +57,13 @@ Prebuilt Windows x64 binaries are on the
 - **Clean exit.** `ESC` restores your console exactly as it was.
 - **Tiny and dependency-free.** Plain C99 compiled with MSVC straight to a
   native Windows x64 executable.
-- **Fast.** Rendering is multi-threaded (OpenMP, all cores), the object/camera
-  transform is hoisted out of the per-ray code, meshes use a cache-friendly BVH
-  with a packed triangle layout, and analytic shapes use adaptive supersampling.
-  `--bench <frames>` reports `ms/frame` and `fps`.
+- **Fast.** Rendering is multi-threaded across all cores (via a lightweight
+  blocking worker pool — no OpenMP runtime and no busy-waiting, so idle CPU use
+  is minimal), the object/camera transform is hoisted out of the per-ray code,
+  meshes use a cache-friendly BVH with a packed triangle layout, and analytic
+  shapes use adaptive supersampling. The interactive loop is capped to a
+  target frame rate (default `60`, `--fps`), and `--bench <frames>` reports
+  `ms/frame` and `fps`.
 
 ## Requirements
 
@@ -105,6 +108,7 @@ build\ascii3D.exe -s cube
 | `--menu` | With `--snapshot`: also draw the model list (preview). |
 | `--lod <level>` | With `--snapshot`: render at a given LOD level (`0`..`6`). |
 | `--bench <frames>` | Benchmark offscreen rendering (`ms/frame`, `fps`) and exit. |
+| `--fps <n>` | Interactive frame-rate cap (`1`..`240`, default `60`; `0` = uncapped). |
 
 ### Examples
 
@@ -290,7 +294,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.4**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.5**. See [changelog.md](changelog.md) for details.
 
 ## Roadmap
 
