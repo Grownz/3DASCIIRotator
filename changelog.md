@@ -4,6 +4,18 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] - 2026-10-07
+
+### Added
+- Models that exceed the triangle budget are no longer rejected: they are
+  reduced with a shape-preserving **LOD** (vertex-cluster decimation) and then
+  displayed.
+- `Page Up` / `Page Down` cycle the LOD strength (about halving the triangle
+  count each step) for a mesh that was reduced.
+- `--lod <level>` renders a snapshot at a given LOD level.
+- User models are now parsed **lazily** (on first display), so a large model in
+  `models/` no longer slows down start-up or unrelated shapes.
+
 ## [0.2.1] - 2026-10-07
 
 ### Added

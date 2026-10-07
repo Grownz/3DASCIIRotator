@@ -32,8 +32,9 @@ Prebuilt Windows x64 binaries are on the
   press `SPACE` to switch to the next one without restarting.
 - **Bring your own models.** Drop `.stl`, `.obj` or `.ply` files into a
   `models/` folder next to the executable; they are detected automatically
-  (live) and added to the `SPACE` cycle. An optional `<name>.json` sidecar can
-  set the up axis, rotation, zoom and display name.
+  (live) and added to the `SPACE` cycle. Meshes with too many triangles are
+  reduced with a shape-preserving LOD instead of being rejected. An optional
+  `<name>.json` sidecar can set the up axis, rotation, zoom and display name.
 - **Model list.** Press `Tab` for a scrollable list of every available
   shape/model on the right; pick with the arrow keys or the mouse wheel and
   load with `SPACE`/`ENTER`.
@@ -120,6 +121,7 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 | `Enter` | Shatter the solid; press again to rebuild it. |
 | `Space` | Switch to the next shape; while the model list is open, load the selected model. |
 | `Tab` | Toggle the model list on the right. While open, `Up`/`Down` or the mouse wheel move the selection, `Enter`/`Space` load it, and `Tab` closes it. |
+| `Page Up` / `Page Down` | Weaker / stronger LOD for meshes that were reduced (too many triangles). |
 | `R` | Rescan the `models/` folder now. |
 | `q` | Quit (convenience alias for `ESC`). |
 
@@ -134,9 +136,11 @@ arrow keys (or the mouse wheel) and load with `SPACE`/`ENTER`.
 
 - **Formats:** STL (binary and ASCII), OBJ, PLY (ASCII and binary
   little-endian). Convert anything else (e.g. glTF) to one of these first.
-- **Limits:** a file up to 128 MB and up to 500k triangles; larger files are
-  skipped with a message. Very heavy meshes (\(>100\)k triangles) drop the
-  2×2 supersampling to keep the frame rate up.
+- **Limits & LOD:** a file up to 128 MB and up to 5M triangles is read. A mesh
+  with more than 500k triangles is **reduced with a shape-preserving LOD**
+  (vertex-cluster decimation) instead of being rejected; `Page Up` / `Page Dn`
+  cycle the LOD strength (about halving the triangle count each step). Very
+  heavy meshes also drop the 2×2 supersampling to keep the frame rate up.
 - **Orientation:** models are assumed **Z-up** and centred/scaled
   automatically. Anything else can be fixed with a sidecar.
 - **Sidecar (optional):** a `<name>.json` next to the model:
@@ -196,6 +200,8 @@ settles into a shallow debris layer on the floor the object was resting on.
   src/main.c            application source (shapes, rendering, registry)
   src/loader.c          STL / OBJ / PLY readers
   src/loader.h          loader interface
+  src/simplify.c        vertex-cluster LOD decimation
+  src/simplify.h        simplify interface
   src/stego_model.h     embedded stegosaurus mesh (generated)
   src/f1_model.h        embedded F1 car mesh (generated)
   src/companion_model.h embedded companion cube mesh (generated)
@@ -265,7 +271,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.1**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.2**. See [changelog.md](changelog.md) for details.
 
 ## Roadmap
 

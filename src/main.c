@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.1
+ * 3D ASCII Rotator - version 0.2.2
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -27,6 +27,7 @@
 #include <wchar.h>
 
 #include "loader.h"
+#include "simplify.h"
 
 #include "stego_model.h"
 #include "f1_model.h"
@@ -40,7 +41,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.1"
+#define APP_VERSION "0.2.2"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -59,7 +60,8 @@
 #define VIEW_HALF  1.55      /* half height of the view plane       */
 #define CHAR_ASPECT 0.5      /* console cell width / height         */
 
-#define MAX_TRIS     500000  /* triangle cap for loaded models      */
+#define MAX_TRIS     500000  /* soft cap for loaded models          */
+#define MAX_LOAD_TRIS 5000000 /* hard reader cap before LOD          */
 #define SUPER_TRIS   100000  /* above this, single sample per cell  */
 #define MAX_MODELS   32      /* max user models kept                */
 #define BVH_CACHE     3      /* BVHs kept alive (LRU)               */
@@ -92,6 +94,7 @@ static int          g_menu_open = 0;
 static int          g_menu_sel = 0;
 static int          g_menu_scroll = 0;
 static int          g_menu_start = 0;              /* --menu (snapshot preview) */
+static int          g_lod_arg = -1;                /* --lod level (snapshot) */
 
 /* ------------------------------------------------------------------ vectors */
 
@@ -153,6 +156,11 @@ typedef struct {
     float    bmin[3], bmax[3]; /* object-space bounding box                 */
     int      owned;   /* 1 = verts/tris are malloc'd (free on destroy)     */
     int      built;   /* 1 = BVH is built                                  */
+    /* optional LOD source (kept when the mesh had too many triangles) */
+    const float        *src_verts;
+    const unsigned int *src_tris;
+    int      src_nvert, src_ntri;
+    int      lod_level;
 } MeshDef;
 
 static int g_bvh_n = 0;          /* node counter while building        */
@@ -347,7 +355,12 @@ static void mesh_build(MeshDef *m) {
 static void mesh_destroy(MeshDef *m) {
     if (!m) return;
     mesh_release(m);
-    if (m->owned) { free((void *)m->verts); free((void *)m->tris); }
+    if (m->owned) {
+        free((void *)m->verts);
+        free((void *)m->tris);
+        free((void *)m->src_verts);
+        free((void *)m->src_tris);
+    }
     free(m);
 }
 
@@ -406,8 +419,12 @@ static MeshDef g_mesh_china = { CHINA_VERT, CHINA_TRI, CHINA_NVERT, CHINA_NTRI,
 typedef struct {
     char     name[64];
     int      analytic;   /* SH_* for analytic shapes, -1 for meshes */
-    MeshDef *mesh;       /* NULL for analytic shapes                */
+    int      model;      /* index into the user-model list, or -1   */
+    MeshDef *mesh;       /* mesh of the item, or NULL               */
 } ShapeItem;
+
+/* defined in the user-models section below */
+static MeshDef *model_load(int idx);
 
 static ShapeItem *g_items = NULL;
 static int        g_item_count = 0, g_item_cap = 0, g_item_index = 0;
@@ -458,6 +475,7 @@ static int items_add(const char *name, int analytic, MeshDef *mesh) {
         strncpy(it->name, name, sizeof(it->name) - 1);
         it->name[sizeof(it->name) - 1] = '\0';
         it->analytic = analytic;
+        it->model = -1;
         it->mesh = mesh;
     }
     return g_item_count++;
@@ -502,8 +520,17 @@ static void select_index(int i) {
     strncpy(g_shape_name_buf, it->name, sizeof(g_shape_name_buf) - 1);
     g_shape_name_buf[sizeof(g_shape_name_buf) - 1] = '\0';
     g_shattered = 0;
-    if (it->mesh) { g_analytic = -1; g_mesh = it->mesh; lru_touch(it->mesh); }
-    else          { g_analytic = it->analytic; g_mesh = NULL; }
+    if (it->model >= 0) {
+        MeshDef *m = it->mesh ? it->mesh : model_load(it->model);
+        it->mesh = m;
+        g_analytic = -1;
+        g_mesh = m;
+        if (m) lru_touch(m);
+    } else if (it->mesh) {
+        g_analytic = -1; g_mesh = it->mesh; lru_touch(it->mesh);
+    } else {
+        g_analytic = it->analytic; g_mesh = NULL;
+    }
 }
 
 static int select_by_name(const char *name) {
@@ -1033,6 +1060,27 @@ static v3 rot_y(v3 p, double a) {
     return v3_make(p.x * c + p.z * s, p.y, -p.x * s + p.z * c);
 }
 
+/* ---- LOD levels (keep-fractions of the source triangle count) ------------ */
+static const double LOD_KEEP[] = { 1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625 };
+#define LOD_N ((int)(sizeof(LOD_KEEP) / sizeof(LOD_KEEP[0])))
+
+static int lod_target(int src_ntri, int level) {
+    int t;
+    if (level < 0) level = 0;
+    if (level >= LOD_N) level = LOD_N - 1;
+    t = (int)((double)src_ntri * LOD_KEEP[level]);
+    if (t < 64) t = 64;
+    if (t > src_ntri) t = src_ntri;
+    return t;
+}
+
+static int default_lod_level(int src_ntri) {
+    int i;
+    for (i = 0; i < LOD_N; ++i)
+        if (lod_target(src_ntri, i) <= MAX_TRIS) return i;
+    return LOD_N - 1;
+}
+
 /* Transform, centre and scale a RawMesh into an owned MeshDef. Steals rm->tris. */
 static MeshDef *make_mesh(RawMesh *rm, const ModelMeta *meta) {
     MeshDef *m;
@@ -1081,7 +1129,57 @@ static MeshDef *make_mesh(RawMesh *rm, const ModelMeta *meta) {
     m->zoom   = (meta->zoom > 0.01 && meta->zoom < 100.0) ? meta->zoom : 1.0;
     m->owned  = 1;
     m->built  = 0;
+
+    if (m->ntri > MAX_TRIS) {           /* too detailed: keep a source and LOD it */
+        int lvl = default_lod_level(m->ntri);
+        RawMesh out;
+        char err[64];
+        if (simplify_cluster(m->verts, m->nvert, m->tris, m->ntri,
+                             lod_target(m->ntri, lvl), &out, err, sizeof(err))) {
+            m->src_verts = m->verts;  m->src_tris = m->tris;
+            m->src_nvert = m->nvert;  m->src_ntri = m->ntri;
+            m->verts = out.verts;     m->tris = out.tris;
+            m->nvert = out.nvert;     m->ntri = out.ntri;
+            m->lod_level = lvl;
+            _snprintf(g_model_msg, sizeof(g_model_msg),
+                      "LOD: reduced to %d tris (PageUp/PageDown)", m->ntri);
+        } else {
+            m->lod_level = 0;
+        }
+    }
     return m;
+}
+
+/* Re-run the LOD decimation for a mesh at the given level. */
+static void set_lod(MeshDef *m, int level) {
+    RawMesh out;
+    char err[64];
+    if (!m || !m->src_tris) return;
+    if (level < 0) level = 0;
+    if (level >= LOD_N) level = LOD_N - 1;
+    if (!simplify_cluster(m->src_verts, m->src_nvert, m->src_tris, m->src_ntri,
+                          lod_target(m->src_ntri, level), &out, err, sizeof(err))) {
+        _snprintf(g_model_msg, sizeof(g_model_msg), "LOD failed: %s", err);
+        return;
+    }
+    free((void *)m->verts);
+    free((void *)m->tris);
+    m->verts = out.verts; m->tris = out.tris;
+    m->nvert = out.nvert; m->ntri = out.ntri;
+    m->lod_level = level;
+    mesh_release(m);
+    lru_touch(m);
+    _snprintf(g_model_msg, sizeof(g_model_msg),
+              "LOD %d/%d: %d triangles", level + 1, LOD_N, m->ntri);
+}
+
+static void apply_lod(int delta) {
+    if (!g_mesh || !g_mesh->src_tris) {
+        _snprintf(g_model_msg, sizeof(g_model_msg),
+                  "LOD: only for meshes reduced from too many triangles");
+        return;
+    }
+    set_lod(g_mesh, g_mesh->lod_level + delta);
 }
 
 static void stem_of(const wchar_t *name, char *out, int cap) {
@@ -1098,7 +1196,7 @@ static MeshDef *load_model_mesh(const wchar_t *path, const char *stem,
     ModelMeta meta;
     MeshDef *m;
 
-    if (!loader_load(path, MAX_TRIS, &rm, err, errsz)) return NULL;
+    if (!loader_load(path, MAX_LOAD_TRIS, &rm, err, errsz)) return NULL;
     meta_defaults(&meta);
     meta_read(path, &meta);
     m = make_mesh(&rm, &meta);
@@ -1120,12 +1218,41 @@ static void unique_name(char *buf, int cap) {
     }
 }
 
+/* ---- user models (loaded lazily, so a scan stays cheap) ----------------- */
+typedef struct {
+    wchar_t            path[MAX_PATH];
+    wchar_t            wname[MAX_PATH];
+    char               stem[64];
+    char               disp[64];
+    unsigned long long mtime, size;
+    MeshDef           *mesh;   /* NULL until first shown */
+} ModelFile;
+
+static ModelFile g_models[MAX_MODELS];
+static int       g_model_count = 0;
+
+static MeshDef *model_load(int idx) {
+    char tmp[64], err[128];
+    MeshDef *m;
+    if (idx < 0 || idx >= g_model_count) return NULL;
+    if (g_models[idx].mesh) return g_models[idx].mesh;
+    m = load_model_mesh(g_models[idx].path, g_models[idx].stem, tmp, sizeof(tmp), err, sizeof(err));
+    if (!m) {
+        _snprintf(g_model_msg, sizeof(g_model_msg), "models: %ls: %s", g_models[idx].wname, err);
+        return NULL;
+    }
+    g_models[idx].mesh = m;
+    return m;
+}
+
 static void models_clear_loaded(void) {
     int i;
     lru_clear();                              /* release any BVHs first */
-    for (i = g_item_count - 1; i >= 0; --i) {
-        if (g_items[i].mesh && g_items[i].mesh->owned) {
-            mesh_destroy(g_items[i].mesh);
+    for (i = 0; i < g_model_count; ++i)
+        if (g_models[i].mesh) { mesh_destroy(g_models[i].mesh); g_models[i].mesh = NULL; }
+    g_model_count = 0;
+    for (i = g_item_count - 1; i >= 0; --i) { /* drop stale loaded items */
+        if (g_items[i].model >= 0) {
             memmove(&g_items[i], &g_items[i + 1],
                     (size_t)(g_item_count - i - 1) * sizeof(ShapeItem));
             --g_item_count;
@@ -1200,17 +1327,24 @@ static void models_poll(int force) {
 
         models_clear_loaded();
         for (i = 0; i < ne && i < MAX_MODELS; ++i) {
-            char stem[64], disp[64], err[128];
-            MeshDef *m;
-            stem_of(ents[i].wname, stem, sizeof(stem));
-            err[0] = '\0';
-            m = load_model_mesh(ents[i].path, stem, disp, sizeof(disp), err, sizeof(err));
-            if (!m) {
-                _snprintf(g_model_msg, sizeof(g_model_msg), "models: %ls: %s", ents[i].wname, err);
-                continue;
-            }
-            unique_name(disp, sizeof(disp));
-            items_add(disp, -1, m);
+            ModelFile *mf = &g_models[g_model_count];
+            ModelMeta meta;
+            int it;
+            wcscpy(mf->path, ents[i].path);
+            wcscpy(mf->wname, ents[i].wname);
+            mf->mtime = ents[i].mtime;
+            mf->size = ents[i].size;
+            mf->mesh = NULL;
+            stem_of(mf->wname, mf->stem, sizeof(mf->stem));
+            meta_defaults(&meta);
+            meta_read(mf->path, &meta);           /* cheap: read the name only */
+            if (meta.has_name) strncpy(mf->disp, meta.name, sizeof(mf->disp) - 1);
+            else               strncpy(mf->disp, mf->stem, sizeof(mf->disp) - 1);
+            mf->disp[sizeof(mf->disp) - 1] = '\0';
+            unique_name(mf->disp, sizeof(mf->disp));
+            it = items_add(mf->disp, -1, NULL);   /* mesh is loaded on demand */
+            if (it >= 0) g_items[it].model = g_model_count;
+            ++g_model_count;
         }
         if (ne > MAX_MODELS)
             _snprintf(g_model_msg, sizeof(g_model_msg), "models: only first %d files loaded", MAX_MODELS);
@@ -1243,7 +1377,8 @@ static void print_help(void) {
         "      --tilt <deg>     Initial axis tilt in degrees, -90..90 (default: 0)\n"
         "      --shatter        With --snapshot: shatter and simulate the fall\n"
         "      --sim <sec>      With --shatter: seconds to simulate (default: 3)\n"
-        "      --menu           With --snapshot: draw the model list (preview)\n\n"
+        "      --menu           With --snapshot: draw the model list (preview)\n"
+        "      --lod <level>    With --snapshot: apply an LOD level (0..%d)\n\n"
         "Controls (interactive):\n"
         "  ESC                  Quit\n"
         "  +                    Increase spin by %d deg/s (max %d deg/s)\n"
@@ -1255,13 +1390,15 @@ static void print_help(void) {
         "  TAB                  Toggle the model list on the right; then pick\n"
         "                       with Up/Down (tilt pauses) and load with\n"
         "                       SPACE/ENTER; scroll with the mouse wheel\n"
+        "  PAGE UP / PAGE DOWN  Weaker / stronger LOD for meshes that were\n"
+        "                       reduced from too many triangles\n"
         "  R                    Rescan the models/ folder\n"
         "  q                    Quit\n\n"
         "Drop .stl/.obj/.ply files into the 'models' folder next to this\n"
         "executable; they are detected automatically and added to the cycle.\n",
         APP_NAME, APP_VERSION,
         (int)SPEED_STEP, (int)MAX_SPEED, (int)SPEED_STEP, (int)MIN_SPEED,
-        (int)TILT_STEP, (int)MAX_TILT);
+        (int)TILT_STEP, (int)MAX_TILT, LOD_N - 1);
 }
 
 /* Shape aliases are resolved by canonical_name() / select_by_name(). */
@@ -1284,6 +1421,12 @@ static int parse_args(int argc, char **argv) {
             g_snapshot = 1;
         } else if (_stricmp(a, "--menu") == 0) {
             g_menu_start = 1;
+        } else if (_stricmp(a, "--lod") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "error: --lod requires a value\n");
+                return 0;
+            }
+            g_lod_arg = atoi(argv[++i]);
         } else if (_stricmp(a, "-s") == 0 || _stricmp(a, "--shape") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "error: %s requires a value\n", a);
@@ -1383,7 +1526,9 @@ int main(int argc, char **argv) {
         g_angle = g_start_angle * (PI / 180.0);
         grid = (char *)malloc((size_t)cols * rows);
         if (!grid) return 1;
+        if (g_lod_arg >= 0 && g_mesh && g_mesh->src_tris) set_lod(g_mesh, g_lod_arg);
         render_grid(grid, cols, rows);
+        if (g_model_msg[0]) { fprintf(stderr, "%s\n", g_model_msg); g_model_msg[0] = '\0'; }
         if (g_menu_start) {
             g_menu_open = 1;
             g_menu_sel = g_item_index;
@@ -1463,6 +1608,8 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_RETURN || vk == VK_SPACE) select_index(g_menu_sel);
                                 else if (ch == '+' || ch == '=') { g_speed += SPEED_STEP; if (g_speed > MAX_SPEED) g_speed = MAX_SPEED; }
                                 else if (ch == '-' || ch == '_') { g_speed -= SPEED_STEP; if (g_speed < MIN_SPEED) g_speed = MIN_SPEED; }
+                                else if (vk == VK_PRIOR) apply_lod(-1);
+                                else if (vk == VK_NEXT)  apply_lod(1);
                                 else if (ch == 'q' || ch == 'Q') g_running = 0;
                                 else if (ch == 'r' || ch == 'R') models_poll(1);
                             } else {
@@ -1483,6 +1630,8 @@ int main(int argc, char **argv) {
                                     }
                                 } else if (ch == '+' || ch == '=') { g_speed += SPEED_STEP; if (g_speed > MAX_SPEED) g_speed = MAX_SPEED; }
                                 else if (ch == '-' || ch == '_') { g_speed -= SPEED_STEP; if (g_speed < MIN_SPEED) g_speed = MIN_SPEED; }
+                                else if (vk == VK_PRIOR) apply_lod(-1);
+                                else if (vk == VK_NEXT)  apply_lod(1);
                                 else if (ch == 'r' || ch == 'R') models_poll(1);
                             }
                         } else if (r->EventType == MOUSE_EVENT && g_menu_open) {
