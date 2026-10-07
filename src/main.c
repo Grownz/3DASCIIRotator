@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.0
+ * 3D ASCII Rotator - version 0.2.1
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -20,7 +20,6 @@
 #define _CRT_SECURE_NO_WARNINGS
 
 #include <windows.h>
-#include <conio.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,7 +40,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.0"
+#define APP_VERSION "0.2.1"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -87,6 +86,12 @@ static int          g_shattered   = 0;             /* runtime shatter state */
 static char         g_req_shape[64] = "";          /* -s value, resolved later */
 static int          g_req_shape_set = 0;
 static char         g_model_msg[160] = "";         /* last model load message  */
+
+/* model menu (right-hand list toggled with Tab) */
+static int          g_menu_open = 0;
+static int          g_menu_sel = 0;
+static int          g_menu_scroll = 0;
+static int          g_menu_start = 0;              /* --menu (snapshot preview) */
 
 /* ------------------------------------------------------------------ vectors */
 
@@ -731,6 +736,52 @@ static void draw_hud(char *grid, int cols, int rows) {
     (void)rows;
 }
 
+/* Right-hand model list (Tab): about a quarter of the width, top to bottom. */
+static void draw_menu(char *grid, int cols, int rows) {
+    int pw = cols / 4;
+    int x0, listrows, i, r, c;
+    if (pw < 12) pw = 12;
+    if (pw > cols - 4) pw = cols - 4;
+    if (pw < 4) return;
+    x0 = cols - pw;
+    listrows = rows - 1;
+    if (listrows < 1) return;
+
+    if (g_menu_sel >= g_item_count) g_menu_sel = g_item_count - 1;
+    if (g_menu_sel < 0) g_menu_sel = 0;
+
+    /* scroll the window so the selection stays visible */
+    if (g_menu_sel < g_menu_scroll) g_menu_scroll = g_menu_sel;
+    if (g_menu_sel >= g_menu_scroll + listrows) g_menu_scroll = g_menu_sel - listrows + 1;
+    if (g_menu_scroll > g_item_count - listrows) g_menu_scroll = g_item_count - listrows;
+    if (g_menu_scroll < 0) g_menu_scroll = 0;
+
+    for (r = 0; r < rows; ++r) {
+        for (c = x0; c < cols; ++c) grid[(size_t)r * cols + c] = ' ';
+        grid[(size_t)r * cols + x0] = '|';
+    }
+    {
+        const char *t = " models ";
+        c = x0 + 1;
+        while (*t && c < cols) grid[c++] = *t++;
+    }
+    for (i = 0; i < listrows && g_menu_scroll + i < g_item_count; ++i) {
+        int idx = g_menu_scroll + i;
+        const char *nm = g_items[idx].name;
+        int avail, k;
+        r = 1 + i;
+        grid[(size_t)r * cols + (x0 + 1)] = (idx == g_menu_sel) ? '>' : ' ';
+        avail = cols - x0 - 2;                 /* name cells (up to the last column) */
+        if (avail < 1) avail = 1;
+        for (k = 0; k < avail && nm[k]; ++k) grid[(size_t)r * cols + (x0 + 2 + k)] = nm[k];
+        if (nm[k]) grid[(size_t)r * cols + (cols - 1)] = '~';   /* truncated */
+    }
+    if (g_menu_scroll > 0)
+        grid[(size_t)1 * cols + (cols - 1)] = '^';
+    if (g_menu_scroll + listrows < g_item_count)
+        grid[(size_t)(rows - 1) * cols + (cols - 1)] = 'v';
+}
+
 /* --------------------------------------------------------------- particles
  * When the object is shattered (ENTER / --shatter) every visible character
  * becomes an independent particle that falls under gravity onto the invisible
@@ -1191,7 +1242,8 @@ static void print_help(void) {
         "      --angle <deg>    Initial rotation angle in degrees (default: 0)\n"
         "      --tilt <deg>     Initial axis tilt in degrees, -90..90 (default: 0)\n"
         "      --shatter        With --snapshot: shatter and simulate the fall\n"
-        "      --sim <sec>      With --shatter: seconds to simulate (default: 3)\n\n"
+        "      --sim <sec>      With --shatter: seconds to simulate (default: 3)\n"
+        "      --menu           With --snapshot: draw the model list (preview)\n\n"
         "Controls (interactive):\n"
         "  ESC                  Quit\n"
         "  +                    Increase spin by %d deg/s (max %d deg/s)\n"
@@ -1200,6 +1252,9 @@ static void print_help(void) {
         "                       in %d deg steps (max %d deg)\n"
         "  ENTER                Shatter the object; press again to rebuild it\n"
         "  SPACE                Switch to the next shape (insertion order)\n"
+        "  TAB                  Toggle the model list on the right; then pick\n"
+        "                       with Up/Down (tilt pauses) and load with\n"
+        "                       SPACE/ENTER; scroll with the mouse wheel\n"
         "  R                    Rescan the models/ folder\n"
         "  q                    Quit\n\n"
         "Drop .stl/.obj/.ply files into the 'models' folder next to this\n"
@@ -1227,6 +1282,8 @@ static int parse_args(int argc, char **argv) {
             exit(0);
         } else if (_stricmp(a, "--snapshot") == 0) {
             g_snapshot = 1;
+        } else if (_stricmp(a, "--menu") == 0) {
+            g_menu_start = 1;
         } else if (_stricmp(a, "-s") == 0 || _stricmp(a, "--shape") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "error: %s requires a value\n", a);
@@ -1288,8 +1345,8 @@ static void write_all(HANDLE h, int is_console, const char *buf, int len) {
 }
 
 int main(int argc, char **argv) {
-    HANDLE h_out;
-    DWORD  orig_mode = 0;
+    HANDLE h_out, h_in;
+    DWORD  orig_mode = 0, in_mode = 0;
     int    is_console, cols = 0, rows = 0;
     char  *grid = NULL, *out = NULL;
     LARGE_INTEGER freq, now, last;
@@ -1327,6 +1384,11 @@ int main(int argc, char **argv) {
         grid = (char *)malloc((size_t)cols * rows);
         if (!grid) return 1;
         render_grid(grid, cols, rows);
+        if (g_menu_start) {
+            g_menu_open = 1;
+            g_menu_sel = g_item_index;
+            draw_menu(grid, cols, rows);
+        }
         if (g_shatter) {
             double t = 0.0;
             rng_seed(12345u);
@@ -1363,6 +1425,10 @@ int main(int argc, char **argv) {
     /* enable ANSI/VT escape sequences, hide cursor, use the alt screen */
     SetConsoleMode(h_out, orig_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING |
                           ENABLE_PROCESSED_OUTPUT);
+    h_in = GetStdHandle(STD_INPUT_HANDLE);
+    GetConsoleMode(h_in, &in_mode);
+    SetConsoleMode(h_in, (in_mode | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS)
+                          & ~((DWORD)ENABLE_QUICK_EDIT_MODE));
     SetConsoleTitleA(APP_NAME " " APP_VERSION " - press ESC to quit");
     SetConsoleCtrlHandler(on_ctrl, TRUE);
     write_all(h_out, is_console, "\x1b[?1049h\x1b[?25l", -1);
@@ -1376,42 +1442,58 @@ int main(int argc, char **argv) {
     while (g_running) {
         double dt;
 
-        /* --- input ---------------------------------------------------- */
-        while (_kbhit()) {
-            int ch = _getch();
-            if (ch == 0 || ch == 0xE0) {          /* extended (arrow) keys */
-                int k = _getch();
-                if (k == 72) {                     /* up: tilt axis away  */
-                    g_tilt += TILT_STEP;
-                    if (g_tilt > MAX_TILT) g_tilt = MAX_TILT;
-                } else if (k == 80) {              /* down: tilt towards  */
-                    g_tilt -= TILT_STEP;
-                    if (g_tilt < -MAX_TILT) g_tilt = -MAX_TILT;
-                }
-                continue;
-            }
-            if (ch == 27 || ch == 'q' || ch == 'Q') {
-                g_running = 0;
-            } else if (ch == ' ') {                /* SPACE: next shape */
-                select_index(g_item_index + 1);
-            } else if (ch == 'r' || ch == 'R') {   /* R: rescan the models folder */
-                models_poll(1);
-            } else if (ch == 13 || ch == 10) {     /* ENTER: shatter / rebuild */
-                if (grid && cols > 0) {
-                    if (!g_shattered) {
-                        render_grid(grid, cols, rows);
-                        shatter_spawn(grid, cols, rows);
-                        g_shattered = 1;
-                    } else {
-                        g_shattered = 0;
+        /* --- input: keys + mouse wheel -------------------------------- */
+        {
+            DWORD nev = 0;
+            if (GetNumberOfConsoleInputEvents(h_in, &nev) && nev > 0) {
+                INPUT_RECORD recs[64];
+                DWORD got = 0, i;
+                if (nev > 64) nev = 64;
+                if (ReadConsoleInputW(h_in, recs, nev, &got)) {
+                    for (i = 0; i < got; ++i) {
+                        INPUT_RECORD *r = &recs[i];
+                        if (r->EventType == KEY_EVENT && r->Event.KeyEvent.bKeyDown) {
+                            WORD vk = r->Event.KeyEvent.wVirtualKeyCode;
+                            char ch = r->Event.KeyEvent.uChar.AsciiChar;
+                            if (g_menu_open) {
+                                if (vk == VK_TAB) g_menu_open = 0;
+                                else if (vk == VK_ESCAPE) g_running = 0;
+                                else if (vk == VK_UP)   { if (g_menu_sel > 0) --g_menu_sel; }
+                                else if (vk == VK_DOWN) { if (g_menu_sel < g_item_count - 1) ++g_menu_sel; }
+                                else if (vk == VK_RETURN || vk == VK_SPACE) select_index(g_menu_sel);
+                                else if (ch == '+' || ch == '=') { g_speed += SPEED_STEP; if (g_speed > MAX_SPEED) g_speed = MAX_SPEED; }
+                                else if (ch == '-' || ch == '_') { g_speed -= SPEED_STEP; if (g_speed < MIN_SPEED) g_speed = MIN_SPEED; }
+                                else if (ch == 'q' || ch == 'Q') g_running = 0;
+                                else if (ch == 'r' || ch == 'R') models_poll(1);
+                            } else {
+                                if (vk == VK_ESCAPE || ch == 'q' || ch == 'Q') g_running = 0;
+                                else if (vk == VK_TAB) { g_menu_open = 1; g_menu_sel = g_item_index; g_menu_scroll = 0; }
+                                else if (vk == VK_UP)   { g_tilt += TILT_STEP; if (g_tilt > MAX_TILT) g_tilt = MAX_TILT; }
+                                else if (vk == VK_DOWN) { g_tilt -= TILT_STEP; if (g_tilt < -MAX_TILT) g_tilt = -MAX_TILT; }
+                                else if (vk == VK_SPACE) select_index(g_item_index + 1);
+                                else if (vk == VK_RETURN) {
+                                    if (grid && cols > 0) {
+                                        if (!g_shattered) {
+                                            render_grid(grid, cols, rows);
+                                            shatter_spawn(grid, cols, rows);
+                                            g_shattered = 1;
+                                        } else {
+                                            g_shattered = 0;
+                                        }
+                                    }
+                                } else if (ch == '+' || ch == '=') { g_speed += SPEED_STEP; if (g_speed > MAX_SPEED) g_speed = MAX_SPEED; }
+                                else if (ch == '-' || ch == '_') { g_speed -= SPEED_STEP; if (g_speed < MIN_SPEED) g_speed = MIN_SPEED; }
+                                else if (ch == 'r' || ch == 'R') models_poll(1);
+                            }
+                        } else if (r->EventType == MOUSE_EVENT && g_menu_open) {
+                            if (r->Event.MouseEvent.dwEventFlags == MOUSE_WHEELED) {
+                                short d = (short)HIWORD(r->Event.MouseEvent.dwButtonState);
+                                if (d > 0) { if (g_menu_sel > 0) --g_menu_sel; }
+                                else if (d < 0) { if (g_menu_sel < g_item_count - 1) ++g_menu_sel; }
+                            }
+                        }
                     }
                 }
-            } else if (ch == '+' || ch == '=') {
-                g_speed += SPEED_STEP;
-                if (g_speed > MAX_SPEED) g_speed = MAX_SPEED;
-            } else if (ch == '-' || ch == '_') {
-                g_speed -= SPEED_STEP;
-                if (g_speed < MIN_SPEED) g_speed = MIN_SPEED;
             }
         }
         if (!g_running) break;
@@ -1456,6 +1538,7 @@ int main(int argc, char **argv) {
             shatter_draw(grid, cols, rows);
         }
         draw_hud(grid, cols, rows);
+        if (g_menu_open) draw_menu(grid, cols, rows);
 
         /* --- present -------------------------------------------------- */
         {
@@ -1477,6 +1560,7 @@ int main(int argc, char **argv) {
     /* ---- restore the console ----------------------------------------- */
     write_all(h_out, is_console, "\x1b[0m\x1b[?25h\x1b[?1049l", -1);
     SetConsoleMode(h_out, orig_mode);
+    SetConsoleMode(h_in, in_mode);
     free(grid);
     free(out);
     free(g_parts);

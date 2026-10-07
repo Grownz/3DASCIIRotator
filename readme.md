@@ -34,6 +34,9 @@ Prebuilt Windows x64 binaries are on the
   `models/` folder next to the executable; they are detected automatically
   (live) and added to the `SPACE` cycle. An optional `<name>.json` sidecar can
   set the up axis, rotation, zoom and display name.
+- **Model list.** Press `Tab` for a scrollable list of every available
+  shape/model on the right; pick with the arrow keys or the mouse wheel and
+  load with `SPACE`/`ENTER`.
 - **Always spinning.** The solid rotates around the vertical (z) axis at
   15 deg/s by default.
 - **Tiltable spin axis.** Press `Up` / `Down` to tip the spin axis away from or
@@ -113,9 +116,10 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 | `ESC` | Quit. |
 | `+` | Increase spin speed by 5 deg/s (maximum 90 deg/s). |
 | `-` | Decrease spin speed by 5 deg/s (minimum 5 deg/s). |
-| `Up` / `Down` | Tilt the spin axis away from / towards the viewer in 5 deg steps (maximum 90 deg). |
+| `Up` / `Down` | Tilt the spin axis away from / towards the viewer in 5 deg steps (maximum 90 deg). Paused while the model list is open. |
 | `Enter` | Shatter the solid; press again to rebuild it. |
-| `Space` | Switch to the next shape (insertion order). |
+| `Space` | Switch to the next shape; while the model list is open, load the selected model. |
+| `Tab` | Toggle the model list on the right. While open, `Up`/`Down` or the mouse wheel move the selection, `Enter`/`Space` load it, and `Tab` closes it. |
 | `R` | Rescan the `models/` folder now. |
 | `q` | Quit (convenience alias for `ESC`). |
 
@@ -124,7 +128,9 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 Drop 3D files into a **`models/`** folder next to `ascii3D.exe` (created on
 first start). They are picked up automatically and appended after the built-in
 shapes, in alphabetical order; `SPACE` cycles through them and `R` forces a
-rescan.
+rescan. Press **`Tab`** for a scrollable list on the right that shows every
+available shape and model by name (file names without extension); pick with the
+arrow keys (or the mouse wheel) and load with `SPACE`/`ENTER`.
 
 - **Formats:** STL (binary and ASCII), OBJ, PLY (ASCII and binary
   little-endian). Convert anything else (e.g. glTF) to one of these first.
@@ -259,7 +265,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.0**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.1**. See [changelog.md](changelog.md) for details.
 
 ## Roadmap
 

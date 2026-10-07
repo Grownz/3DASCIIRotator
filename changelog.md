@@ -4,6 +4,17 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-10-07
+
+### Added
+- `Tab` toggles a scrollable model list on the right (about a quarter of the
+  width) that shows every available shape/model by name (file names without
+  extension, truncated if too long).
+- While the list is open, `Up`/`Down` (or the mouse wheel) move the selection
+  and `SPACE`/`ENTER` load the selected model; the axis tilt is paused and
+  `Tab` closes the list.
+- `--menu` renders the list in `--snapshot` mode (useful for previews).
+
 ## [0.2.0] - 2026-10-07
 
 ### Added
