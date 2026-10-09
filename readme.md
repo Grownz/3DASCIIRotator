@@ -49,6 +49,10 @@ Prebuilt Windows x64 binaries are on the
   comes within about 5% of the terminal edge (at least one margin is always
   under 10%), and the scale is rotation-invariant, so it keeps the same size
   while it turns.
+- **Animation export.** Press `g` (GIF) or `p` (animated PNG) to write one full
+  360-degree turn with the current colours, tilt and spin speed to
+  `ascii3D_<shape>.gif` / `.png` in the working directory. Transparent
+  background, no HUD, streamed with LZW (GIF) or deflate (APNG) compression.
 - **FPS readout.** Press `Pos1` / `Home` to toggle a frames-per-second display
   in the bottom-left corner.
 - **Always spinning.** The solid rotates around the vertical (z) axis at
@@ -115,6 +119,7 @@ build\ascii3D.exe -s cube
 | `--lod <level>` | With `--snapshot`: render at a given LOD level (`0`..`6`). |
 | `--bench <frames>` | Benchmark offscreen rendering (`ms/frame`, `fps`) and exit. |
 | `--fps <n>` | Interactive frame-rate cap (`1`..`240`, default `60`; `0` = uncapped). |
+| `--export <fmt>` | Write a full 360-degree animation (`gif` or `png`) and exit. |
 
 ### Examples
 
@@ -151,6 +156,7 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 | `Left` / `Right` | In the open model list: move the mesh-colour slider (applied live). |
 | `Shift`+`Left` / `Right` | In the open model list: move the light-source colour slider. |
 | `Pos1` / `Home` | Toggle the FPS display in the bottom-left corner. |
+| `g` / `p` | Export a full 360-degree turn as an animated GIF / APNG (current colours, tilt and speed; transparent background, no HUD). |
 | `R` | Rescan the `models/` folder now. |
 | `q` | Quit (convenience alias for `ESC`). |
 
@@ -231,6 +237,8 @@ settles into a shallow debris layer on the floor the object was resting on.
   src/loader.h          loader interface
   src/simplify.c        vertex-cluster LOD decimation
   src/simplify.h        simplify interface
+  src/export.c          animated GIF / APNG writers
+  src/export.h          export interface
   src/stego_model.h     embedded stegosaurus mesh (generated)
   src/f1_model.h        embedded F1 car mesh (generated)
   src/companion_model.h embedded companion cube mesh (generated)
@@ -301,7 +309,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.10**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.11**. See [changelog.md](changelog.md) for details.
 
 ## Roadmap
 

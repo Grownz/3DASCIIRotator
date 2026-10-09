@@ -4,6 +4,19 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.11] - 2026-10-09
+
+### Added
+- `g` exports a full 360-degree rotation as an **animated GIF** and `p` as an
+  **animated PNG (APNG)**, using the current mesh/light colours, tilt and spin
+  speed. Transparent background, no HUD, full character resolution. Files are
+  written as `ascii3D_<shape>.gif` / `.png`.
+- `--export gif|png` does the same from the command line and exits.
+- New `src/export.c` implements the writers with no external libraries: GIF via
+  LZW (256-colour palette, one transparent index) and APNG via RGBA8 with a
+  zlib/deflate stream (fixed Huffman codes + an LZ77 matcher). Frames are
+  streamed so the whole animation is never held in memory.
+
 ## [0.2.10] - 2026-10-09
 
 ### Removed

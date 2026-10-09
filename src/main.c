@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.10
+ * 3D ASCII Rotator - version 0.2.11
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -23,6 +23,8 @@
 #include <windows.h>
 #include <mmsystem.h>
 #pragma comment(lib, "winmm.lib")
+#pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "user32.lib")
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +34,7 @@
 
 #include "loader.h"
 #include "simplify.h"
+#include "export.h"
 
 #include "stego_model.h"
 #include "f1_model.h"
@@ -45,7 +48,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.10"
+#define APP_VERSION "0.2.11"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -101,6 +104,7 @@ static int          g_menu_scroll = 0;
 static int          g_menu_start = 0;              /* --menu (snapshot preview) */
 static int          g_lod_arg = -1;                /* --lod level (snapshot) */
 static int          g_bench = 0;                   /* --bench <frames>      */
+static int          g_export_fmt = 0;              /* --export gif|png      */
 static int          g_target_fps = 60;             /* --fps (0 = unlimited) */
 
 /* --- status message (auto-hides), FPS HUD, shape colour, menu slider ----- */
@@ -1854,7 +1858,8 @@ static void print_help(void) {
         "      --menu           With --snapshot: draw the model list (preview)\n"
         "      --lod <level>    With --snapshot: apply an LOD level (0..%d)\n"
         "      --bench <frames> Benchmark offscreen rendering and exit\n"
-        "      --fps <n>        Frame-rate cap for interactive mode (default 60)\n\n"
+        "      --fps <n>        Frame-rate cap for interactive mode (default 60)\n"
+        "      --export <fmt>   Write a 360-degree animation (gif|png) and exit\n\n"
         "Controls (interactive):\n"
         "  ESC                  Quit\n"
         "  +                    Increase spin by %d deg/s (max %d deg/s)\n"
@@ -1872,6 +1877,9 @@ static void print_help(void) {
         "  PAGE UP / PAGE DOWN  Weaker / stronger LOD for meshes that were\n"
         "                       reduced from too many triangles\n"
         "  POS1 (HOME)          Toggle the FPS display (bottom-left)\n"
+        "  g / p                Export a full 360-degree turn as an animated\n"
+        "                       GIF / APNG (current colours, tilt and speed;\n"
+        "                       transparent background, no HUD)\n"
         "  R                    Rescan the models/ folder\n"
         "  q                    Quit\n\n"
         "Drop .stl/.obj/.ply files into the 'models' folder next to this\n"
@@ -1913,6 +1921,17 @@ static int parse_args(int argc, char **argv) {
                 return 0;
             }
             g_bench = atoi(argv[++i]);
+        } else if (_stricmp(a, "--export") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "error: --export requires gif or png\n");
+                return 0;
+            }
+            {
+                const char *v = argv[++i];
+                if (_stricmp(v, "gif") == 0) g_export_fmt = 1;
+                else if (_stricmp(v, "png") == 0) g_export_fmt = 2;
+                else { fprintf(stderr, "error: --export expects gif or png\n"); return 0; }
+            }
         } else if (_stricmp(a, "--fps") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "error: --fps requires a value\n");
@@ -2000,6 +2019,194 @@ static void precise_sleep(double sec) {
     Sleep((DWORD)(sec * 1000.0 + 0.5));
 }
 
+/* ------------------------------------------------------- animated export
+ * Rasterises the model grid to pixels with GDI (a white glyph mask that is
+ * then coloured per cell) and streams it to a GIF or APNG file.
+ */
+typedef struct {
+    HDC      hdc;
+    HBITMAP  hbm, oldbm;
+    HFONT    font, oldfont;
+    unsigned char *bits;
+    int      w, h, cellW, cellH;
+} Canvas;
+
+static int canvas_begin(Canvas *cv, int cols, int rows, int cellH) {
+    BITMAPINFO bmi;
+    SIZE sz;
+    HDC screen;
+
+    memset(cv, 0, sizeof(*cv));
+    screen = GetDC(NULL);
+    cv->hdc = CreateCompatibleDC(screen);
+    if (screen) ReleaseDC(NULL, screen);
+    if (!cv->hdc) return 0;
+    cv->cellH = cellH;
+    cv->font = CreateFontW(-cellH, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                           OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+                           FIXED_PITCH | FF_MODERN, L"Consolas");
+    if (!cv->font)
+        cv->font = CreateFontW(-cellH, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                               OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+                               FIXED_PITCH | FF_MODERN, L"Courier New");
+    if (!cv->font) { DeleteDC(cv->hdc); cv->hdc = NULL; return 0; }
+    cv->oldfont = (HFONT)SelectObject(cv->hdc, cv->font);
+    if (!GetTextExtentPoint32W(cv->hdc, L"X", 1, &sz) || sz.cx < 1) sz.cx = cellH / 2;
+    cv->cellW = sz.cx;
+    cv->w = cols * cv->cellW;
+    cv->h = rows * cv->cellH;
+    memset(&bmi, 0, sizeof(bmi));
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = cv->w;
+    bmi.bmiHeader.biHeight = -cv->h;              /* top-down */
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    cv->hbm = CreateDIBSection(cv->hdc, &bmi, DIB_RGB_COLORS, (void **)&cv->bits, NULL, 0);
+    if (!cv->hbm) { SelectObject(cv->hdc, cv->oldfont); DeleteObject(cv->font); DeleteDC(cv->hdc); cv->hdc = NULL; return 0; }
+    cv->oldbm = (HBITMAP)SelectObject(cv->hdc, cv->hbm);
+    return 1;
+}
+
+static void canvas_end(Canvas *cv) {
+    if (cv->oldbm) SelectObject(cv->hdc, cv->oldbm);
+    if (cv->hbm) DeleteObject(cv->hbm);
+    if (cv->oldfont) SelectObject(cv->hdc, cv->oldfont);
+    if (cv->font) DeleteObject(cv->font);
+    if (cv->hdc) DeleteDC(cv->hdc);
+    memset(cv, 0, sizeof(*cv));
+}
+
+/* Draw the whole grid in white on black; the red channel becomes the mask. */
+static void canvas_draw(Canvas *cv, const char *grid, int cols, int rows) {
+    wchar_t wrow[4096];
+    int r, c, cc = cols > 4095 ? 4095 : cols;
+    memset(cv->bits, 0, (size_t)cv->w * cv->h * 4);
+    SetBkMode(cv->hdc, TRANSPARENT);
+    SetTextColor(cv->hdc, RGB(255, 255, 255));
+    for (r = 0; r < rows; ++r) {
+        const char *row = grid + (size_t)r * cols;
+        for (c = 0; c < cc; ++c) wrow[c] = (wchar_t)(unsigned char)row[c];
+        wrow[cc] = 0;
+        TextOutW(cv->hdc, 0, r * cv->cellH, wrow, cc);
+    }
+    GdiFlush();
+}
+
+static void export_status(HANDLE h, int is_console, int i, int n) {
+    char buf[80];
+    if (!is_console) return;
+    _snprintf(buf, sizeof(buf), "\x1b[H\x1b[39mExporting frame %d/%d ...          ", i, n);
+    buf[sizeof(buf) - 1] = '\0';
+    write_all(h, is_console, buf, -1);
+}
+
+/* Export a full 360-degree turn to `path` (GIF if apng==0, else APNG). */
+static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, int rows, int apng) {
+    const int NF = 72;                 /* 5 degrees per frame */
+    Canvas cv;
+    unsigned char grad_rgb[RAMP_N * 3];
+    unsigned char gifpal[16 * 3];
+    unsigned char *idx = NULL, *rgba = NULL;
+    GifWriter *gw = NULL;
+    ApngWriter *aw = NULL;
+    wchar_t path[300];
+    char name[80];
+    int i, r, g, b, rc = 0, cellH = 16;
+    double save_angle = g_angle;
+    int save_shat = g_shattered;
+    int delay_cs, delay_ms;
+    size_t npix;
+
+    if (cols <= 0 || rows <= 0) return 0;
+
+    /* colours for the 15 ramp levels (level 0 is the transparent space) */
+    for (i = 0; i < RAMP_N; ++i) {
+        palette_rgb(g_grad[i], &r, &g, &b);
+        grad_rgb[i * 3 + 0] = (unsigned char)r;
+        grad_rgb[i * 3 + 1] = (unsigned char)g;
+        grad_rgb[i * 3 + 2] = (unsigned char)b;
+    }
+    memset(gifpal, 0, sizeof(gifpal));
+    for (i = 1; i < RAMP_N; ++i) {
+        gifpal[i * 3 + 0] = grad_rgb[i * 3 + 0];
+        gifpal[i * 3 + 1] = grad_rgb[i * 3 + 1];
+        gifpal[i * 3 + 2] = grad_rgb[i * 3 + 2];
+    }
+
+    /* file name from the shape name (sanitised) */
+    {
+        int k = 0;
+        for (i = 0; g_shape_name[i] && k < 60; ++i) {
+            char c = g_shape_name[i];
+            name[k++] = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                        (c >= '0' && c <= '9') || c == '-' || c == '_' ? c : '_';
+        }
+        name[k] = '\0';
+    }
+    _snwprintf(path, 300, L"ascii3D_%hs.%hs", name, apng ? "png" : "gif");
+
+    if (!canvas_begin(&cv, cols, rows, cellH)) { msg_setf("export: cannot create canvas"); return 0; }
+    npix = (size_t)cv.w * cv.h;
+    idx  = (unsigned char *)malloc(npix);
+    rgba = (unsigned char *)malloc(npix * 4);
+    if (!idx || !rgba) { free(idx); free(rgba); canvas_end(&cv); msg_setf("export: out of memory"); return 0; }
+
+    /* frame delay so a full turn lasts 360/speed seconds */
+    {
+        double sp = g_speed > 0.1 ? g_speed : 15.0;
+        delay_cs = (int)(500.0 / sp + 0.5); if (delay_cs < 2) delay_cs = 2;
+        delay_ms = (int)(5000.0 / sp + 0.5); if (delay_ms < 20) delay_ms = 20;
+    }
+
+    if (apng) aw = apng_begin(path, cv.w, cv.h, NF);
+    else      gw = gif_begin(path, cv.w, cv.h, gifpal, RAMP_N);
+    if (!aw && !gw) { free(idx); free(rgba); canvas_end(&cv); msg_setf("export: cannot write file"); return 0; }
+
+    g_shattered = 0;
+    for (i = 0; i < NF; ++i) {
+        g_angle = (double)i * (2.0 * PI / (double)NF);
+        render_grid(grid, cols, rows);
+        canvas_draw(&cv, grid, cols, rows);
+        /* colour every pixel from its cell's ramp level and the mask */
+        for (r = 0; r < rows; ++r) {
+            for (g = 0; g < cols; ++g) {
+                int level = g_ramp_rev[(unsigned char)grid[(size_t)r * cols + g]];
+                int py0 = r * cv.cellH, px0 = g * cv.cellW, y, x;
+                unsigned char R = 0, G = 0, B = 0;
+                if (level > 0) { R = grad_rgb[level * 3]; G = grad_rgb[level * 3 + 1]; B = grad_rgb[level * 3 + 2]; }
+                for (y = 0; y < cv.cellH; ++y) {
+                    size_t base = (size_t)(py0 + y) * cv.w + px0;
+                    for (x = 0; x < cv.cellW; ++x) {
+                        size_t pi = base + x;
+                        unsigned m = cv.bits[pi * 4 + 2];
+                        if (apng) {
+                            rgba[pi * 4 + 0] = R; rgba[pi * 4 + 1] = G;
+                            rgba[pi * 4 + 2] = B; rgba[pi * 4 + 3] = (level > 0) ? (unsigned char)m : 0;
+                        } else {
+                            idx[pi] = (level > 0 && m >= 128) ? (unsigned char)level : 0;
+                        }
+                    }
+                }
+            }
+        }
+        if (apng) apng_frame(aw, rgba, delay_ms, 1000);
+        else      gif_frame(gw, idx, delay_cs);
+        if ((i & 3) == 3) export_status(h_out, is_console, i + 1, NF);
+    }
+    g_angle = save_angle;
+    g_shattered = save_shat;
+
+    if (apng) rc = apng_end(aw); else rc = gif_end(gw);
+    {
+        int W = cv.w, H = cv.h;
+        free(idx); free(rgba); canvas_end(&cv);
+        if (rc) msg_setf("saved %ls (%dx%d, %d frames)", path, W, H, NF);
+        else    msg_setf("export: write failed");
+    }
+    return rc;
+}
+
 /* Offscreen render benchmark: renders `frames` frames over one full turn and
  * reports the average time per frame (no console required). */
 static int run_bench(int frames) {
@@ -2065,6 +2272,20 @@ int main(int argc, char **argv) {
 
     h_out = GetStdHandle(STD_OUTPUT_HANDLE);
     is_console = GetConsoleMode(h_out, &orig_mode) ? 1 : 0;
+
+    /* ---- headless export: --export gif|png ------------------------------- */
+    if (g_export_fmt) {
+        char *eg;
+        int ec = 100, er = 40, ok;
+        g_tilt = g_start_tilt;
+        g_angle = g_start_angle * (PI / 180.0);
+        eg = (char *)malloc((size_t)ec * er);
+        if (!eg) return 1;
+        ok = export_animation(h_out, is_console, eg, ec, er, g_export_fmt == 2);
+        fprintf(stderr, "%s\n", g_model_msg);
+        free(eg);
+        return ok ? 0 : 1;
+    }
 
     /* ---- snapshot mode: one plain frame, no console required ------------- */
     if (g_snapshot) {
@@ -2170,6 +2391,8 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_LEFT)  { if (cks & SHIFT_PRESSED) color_step(&g_light_sel, &g_light_color, -1); else color_step(&g_color_sel, &g_fg_color, -1); }
                                 else if (vk == VK_RIGHT) { if (cks & SHIFT_PRESSED) color_step(&g_light_sel, &g_light_color,  1); else color_step(&g_color_sel, &g_fg_color,  1); }
                                 else if (ch == 'q' || ch == 'Q') g_running = 0;
+                                else if (ch == 'g' || ch == 'G') export_animation(h_out, is_console, grid, cols, rows, 0);
+                                else if (ch == 'p' || ch == 'P') export_animation(h_out, is_console, grid, cols, rows, 1);
                                 else if (ch == 'r' || ch == 'R') models_poll(1);
                             } else {
                                 if (vk == VK_ESCAPE || ch == 'q' || ch == 'Q') g_running = 0;
@@ -2192,6 +2415,8 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_PRIOR) apply_lod(-1);
                                 else if (vk == VK_NEXT)  apply_lod(1);
                                 else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
+                                else if (ch == 'g' || ch == 'G') export_animation(h_out, is_console, grid, cols, rows, 0);
+                                else if (ch == 'p' || ch == 'P') export_animation(h_out, is_console, grid, cols, rows, 1);
                                 else if (ch == 'r' || ch == 'R') models_poll(1);
                             }
                         } else if (r->EventType == MOUSE_EVENT && g_menu_open) {

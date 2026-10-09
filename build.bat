@@ -31,7 +31,7 @@ if errorlevel 1 (
 if not exist build mkdir build
 
 cl /nologo /O2 /W4 /TC /fp:fast /GL /Oi /Ob3 /arch:AVX2 ^
-   src\main.c src\loader.c src\simplify.c ^
+   src\main.c src\loader.c src\simplify.c src\export.c ^
    /Fe:build\%APP%.exe /Fo:build\
 if errorlevel 1 (
   echo [error] Build failed.
