@@ -45,11 +45,12 @@ Prebuilt Windows x64 binaries are on the
   The characters are tinted from the mesh colour (shadow) to the light colour
   (lit). Black and the five darkest greys are skipped so the art stays readable;
   the choice applies immediately.
-- **Font size.** Press `1`..`5` to change the character size. Level `3` is the
-  native resolution (the current look); levels `4` and `5` draw every character
-  as a 2x2 / 3x3 block, so the art looks chunkier while the model keeps the same
-  size on screen. (Finer than native would need a real terminal font change,
-  which Windows Terminal does not allow, so `1` and `2` match level `3`.)
+- **Font size.** Press `1`..`5` to change the character size; the current level
+  is shown bottom-left as `font:N`. In the classic console the real font is
+  resized (`1`/`2` smaller, `4`/`5` larger) and the model is re-fitted so it
+  keeps its size. Where the terminal does not allow font changes (Windows
+  Terminal ignores them), levels `4`/`5` instead draw every character as a
+  2x2 / 3x3 block (chunkier art, same model size) and `1`/`2` match `3`.
 - **FPS readout.** Press `Pos1` / `Home` to toggle a frames-per-second display
   in the bottom-left corner.
 - **Always spinning.** The solid rotates around the vertical (z) axis at
@@ -304,7 +305,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.7**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.8**. See [changelog.md](changelog.md) for details.
 
 ## Roadmap
 

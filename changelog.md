@@ -4,6 +4,17 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.8] - 2026-10-09
+
+### Changed
+- Font-size keys `1`..`5` are now a **hybrid**: they first try the real console
+  font API and **verify** that the size actually changed (Windows Terminal
+  reports success but ignores it), and fall back to block scaling when it is
+  ignored. The current level is shown bottom-left as `font:N`.
+- `GetCurrentConsoleFontEx` often reports a zero font size for TrueType fonts;
+  the size is now read via `GetConsoleFontSize` as well, so the real font path
+  works where it is available.
+
 ## [0.2.7] - 2026-10-09
 
 ### Changed

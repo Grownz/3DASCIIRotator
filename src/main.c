@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.7
+ * 3D ASCII Rotator - version 0.2.8
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -45,7 +45,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.7"
+#define APP_VERSION "0.2.8"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -103,6 +103,8 @@ static int          g_lod_arg = -1;                /* --lod level (snapshot) */
 static int          g_bench = 0;                   /* --bench <frames>      */
 static int          g_target_fps = 60;             /* --fps (0 = unlimited) */
 static int          g_font_level = 3;              /* font size 1..5 (3 = native) */
+static int          g_font_api = -1;               /* -1 unknown, 1 works, 0 unavailable */
+static CONSOLE_FONT_INFOEX g_font_base;
 
 /* --- status message (auto-hides), FPS HUD, shape colour, menu slider ----- */
 static int    g_show_fps = 0;
@@ -211,10 +213,11 @@ static void color_step(int *sel, int *color, int delta) {
     grad_build();
 }
 
-/* Font size -> character block size. Level 3 is the native resolution; larger
- * levels draw every character as a bigger block (coarser art, same model size).
- * Levels 1 and 2 cannot be finer than the native grid, so they equal level 3. */
+/* Font size -> character block size. If the console font API works we change the
+ * real font and never block-scale. Otherwise level 3 is the native resolution;
+ * levels 4/5 draw every character as a bigger block (coarser art, same size). */
 static int font_block(void) {
+    if (g_font_api == 1) return 1;
     if (g_font_level >= 5) return 3;
     if (g_font_level == 4) return 2;
     return 1;
@@ -1144,10 +1147,11 @@ static void draw_hud(char *grid, int cols, int rows) {
     }
 
     g_fps_len = 0;
-    if (g_show_fps) {                     /* FPS display, bottom-left */
-        char fb[32];
+    {                                     /* bottom-left status: font + FPS */
+        char fb[48];
         int len;
-        _snprintf(fb, sizeof(fb), "FPS: %d", (int)(g_fps + 0.5));
+        if (g_show_fps) _snprintf(fb, sizeof(fb), "font:%d  FPS:%d", g_font_level, (int)(g_fps + 0.5));
+        else            _snprintf(fb, sizeof(fb), "font:%d", g_font_level);
         fb[sizeof(fb) - 1] = '\0';
         len = (int)strlen(fb);
         if (len > cols) len = cols;
@@ -1858,8 +1862,9 @@ static void print_help(void) {
         "  LEFT / RIGHT         In the list: move the mesh-colour slider\n"
         "                       (256-colour scale, applied live)\n"
         "  SHIFT+LEFT / RIGHT   Move the light-source colour slider\n"
-        "  1 .. 5               Font size (3 = native); 4/5 draw each character\n"
-        "                       as a 2x2 / 3x3 block (bigger, same model size)\n"
+        "  1 .. 5               Font size: in the classic console the real font is\n"
+        "                       resized; where that is not allowed, 4/5 draw each\n"
+        "                       character as a 2x2 / 3x3 block (same model size)\n"
         "  PAGE UP / PAGE DOWN  Weaker / stronger LOD for meshes that were\n"
         "                       reduced from too many triangles\n"
         "  POS1 (HOME)          Toggle the FPS display (bottom-left)\n"
@@ -1999,6 +2004,65 @@ static void precise_sleep(double sec) {
     Sleep((DWORD)(sec * 1000.0 + 0.5));
 }
 
+/* ---- console font size (keys 1..5). Level 3 is the current size. ---------
+ * SetCurrentConsoleFontEx is the only way to really resize the glyphs; it works
+ * in the classic console but not under Windows Terminal/ConPTY. We probe it and,
+ * if it is unavailable, fall back to block scaling (see font_block()). */
+static void font_query(HANDLE h) {
+    CONSOLE_FONT_INFO cfi;
+    COORD sz;
+
+    memset(&g_font_base, 0, sizeof(g_font_base));
+    g_font_base.cbSize = sizeof(g_font_base);
+    if (GetCurrentConsoleFontEx(h, FALSE, &g_font_base) && g_font_base.dwFontSize.Y > 0) {
+        g_font_api = 1;
+        return;
+    }
+    /* Many consoles report a zero size for TrueType fonts; ask the older API. */
+    if (GetCurrentConsoleFont(h, FALSE, &cfi)) {
+        sz = GetConsoleFontSize(h, cfi.nFont);
+        if (sz.Y > 0) {
+            if (g_font_base.FaceName[0] == L'\0') wcscpy(g_font_base.FaceName, L"Consolas");
+            g_font_base.dwFontSize = sz;
+            if (g_font_base.FontWeight == 0) g_font_base.FontWeight = 400;
+            g_font_api = 1;
+            return;
+        }
+    }
+    /* Last resort: a sensible default face/size; SetCurrentConsoleFontEx will
+     * decide whether it is accepted. */
+    g_font_base.cbSize = sizeof(g_font_base);
+    wcscpy(g_font_base.FaceName, L"Consolas");
+    g_font_base.dwFontSize.X = 0;
+    g_font_base.dwFontSize.Y = 16;
+    g_font_base.FontWeight = 400;
+    g_font_api = 1;
+}
+
+static void font_apply(HANDLE h, int level) {
+    static const double f[5] = { 0.60, 0.80, 1.00, 1.30, 1.65 };
+    CONSOLE_FONT_INFOEX cfx, chk;
+    int h0;
+    if (level < 1) level = 1;
+    if (level > 5) level = 5;
+    g_font_level = level;
+    if (g_font_api == 0) return;                 /* known unavailable */
+    h0 = g_font_base.dwFontSize.Y;
+    if (h0 <= 0) h0 = 16;
+    cfx = g_font_base;
+    cfx.cbSize = sizeof(cfx);
+    if (cfx.dwFontSize.X > 0) cfx.dwFontSize.X = (SHORT)(cfx.dwFontSize.X * f[level - 1] + 0.5);
+    cfx.dwFontSize.Y = (SHORT)(h0 * f[level - 1] + 0.5);
+    if (cfx.dwFontSize.Y < 6)   cfx.dwFontSize.Y = 6;
+    if (cfx.dwFontSize.Y > 128) cfx.dwFontSize.Y = 128;
+    if (!SetCurrentConsoleFontEx(h, FALSE, &cfx)) { g_font_api = 0; return; }
+    chk.cbSize = sizeof(chk);
+    if (GetCurrentConsoleFontEx(h, FALSE, &chk) && chk.dwFontSize.Y == cfx.dwFontSize.Y)
+        g_font_api = 1;                          /* it really changed */
+    else
+        g_font_api = 0;                          /* ignored -> use blocks */
+}
+
 /* Offscreen render benchmark: renders `frames` frames over one full turn and
  * reports the average time per frame (no console required). */
 static int run_bench(int frames) {
@@ -2125,6 +2189,8 @@ int main(int argc, char **argv) {
                           & ~((DWORD)ENABLE_QUICK_EDIT_MODE));
     SetConsoleTitleA(APP_NAME " " APP_VERSION " - press ESC to quit");
     SetConsoleCtrlHandler(on_ctrl, TRUE);
+    font_query(h_out);
+    if (g_font_level != 3) font_apply(h_out, g_font_level);
     write_all(h_out, is_console, "\x1b[?1049h\x1b[?25l", -1);
 
     angle_deg = g_start_angle;
@@ -2166,7 +2232,7 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_PRIOR) apply_lod(-1);
                                 else if (vk == VK_NEXT)  apply_lod(1);
                                 else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
-                                else if (ch >= '1' && ch <= '5') { int b; g_font_level = ch - '0'; g_scale_mesh = NULL; b = font_block(); msg_setf("font size %d (%s)", g_font_level, b == 1 ? "native" : b == 2 ? "2x2 blocks" : "3x3 blocks"); }
+                                else if ((ch >= '1' && ch <= '5') || (vk >= '1' && vk <= '5')) { int lvl = (ch >= '1' && ch <= '5') ? (ch - '0') : (vk - '0'); int b; font_apply(h_out, lvl); g_scale_mesh = NULL; b = font_block(); if (g_font_api == 1) msg_setf("font size %d", lvl); else msg_setf("font size %d (%s)", lvl, b == 1 ? "native" : b == 2 ? "2x2 blocks" : "3x3 blocks"); }
                                 else if (vk == VK_LEFT)  { if (cks & SHIFT_PRESSED) color_step(&g_light_sel, &g_light_color, -1); else color_step(&g_color_sel, &g_fg_color, -1); }
                                 else if (vk == VK_RIGHT) { if (cks & SHIFT_PRESSED) color_step(&g_light_sel, &g_light_color,  1); else color_step(&g_color_sel, &g_fg_color,  1); }
                                 else if (ch == 'q' || ch == 'Q') g_running = 0;
@@ -2192,7 +2258,7 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_PRIOR) apply_lod(-1);
                                 else if (vk == VK_NEXT)  apply_lod(1);
                                 else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
-                                else if (ch >= '1' && ch <= '5') { int b; g_font_level = ch - '0'; g_scale_mesh = NULL; b = font_block(); msg_setf("font size %d (%s)", g_font_level, b == 1 ? "native" : b == 2 ? "2x2 blocks" : "3x3 blocks"); }
+                                else if ((ch >= '1' && ch <= '5') || (vk >= '1' && vk <= '5')) { int lvl = (ch >= '1' && ch <= '5') ? (ch - '0') : (vk - '0'); int b; font_apply(h_out, lvl); g_scale_mesh = NULL; b = font_block(); if (g_font_api == 1) msg_setf("font size %d", lvl); else msg_setf("font size %d (%s)", lvl, b == 1 ? "native" : b == 2 ? "2x2 blocks" : "3x3 blocks"); }
                                 else if (ch == 'r' || ch == 'R') models_poll(1);
                             }
                         } else if (r->EventType == MOUSE_EVENT && g_menu_open) {
