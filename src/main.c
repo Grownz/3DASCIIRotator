@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.12
+ * 3D ASCII Rotator - version 0.2.13
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -48,7 +48,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.12"
+#define APP_VERSION "0.2.13"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -2134,11 +2134,12 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
     char name[80];
     int i, r, g, b, rc = 0;
     int used[RAMP_N], gifmap[RAMP_N], apng255[RAMP_N], apng128[RAMP_N];
-    int un = 0;
+    int un = 0, minc, maxc, minr, maxr, cw, ch;
+    char *crop = NULL;
     double save_angle = g_angle;
     int save_shat = g_shattered;
-    int delay_cs, delay_ms;
-    size_t npix, fbytes;
+    int delay_cs, delay_num, delay_den;
+    size_t npix, fbytes, cbytes;
 
     if (cols <= 0 || rows <= 0) return 0;
 
@@ -2155,6 +2156,7 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
     frames = (char *)malloc(fbytes * NF);
     if (!frames) { msg_setf("export: out of memory"); return 0; }
     memset(used, 0, sizeof(used));
+    minc = cols; maxc = -1; minr = rows; maxr = -1;
     g_shattered = 0;
     for (i = 0; i < NF; ++i) {
         g_angle = (double)i * (2.0 * PI / (double)NF);
@@ -2164,12 +2166,22 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
             const char *row = grid + (size_t)r * cols;
             for (g = 0; g < cols; ++g) {
                 int level = g_ramp_rev[(unsigned char)row[g]];
-                if (level > 0) used[level] = 1;
+                if (level > 0) {
+                    used[level] = 1;
+                    if (g < minc) minc = g;
+                    if (g > maxc) maxc = g;
+                    if (r < minr) minr = r;
+                    if (r > maxr) maxr = r;
+                }
             }
         }
         if ((i & 7) == 7) export_status(h_out, is_console, i + 1, NF);
     }
     g_angle = save_angle;
+    if (maxc < 0) { free(frames); msg_setf("export: nothing to draw"); return 0; }
+    cw = maxc - minc + 1;
+    ch = maxr - minr + 1;
+    cbytes = (size_t)cw * ch;
 
     /* ---- build both palettes from only the colours actually used --------- */
     memset(gifpal, 0, sizeof(gifpal));
@@ -2208,29 +2220,38 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
     }
     _snwprintf(path, 300, L"ascii3D_%hs.%hs", name, apng ? "png" : "gif");
 
-    if (!canvas_begin(&cv, cols, rows, EXPORT_MAXDIM)) { free(frames); msg_setf("export: cannot create canvas"); return 0; }
+    crop = (char *)malloc(cbytes);
+    if (!crop) { free(frames); msg_setf("export: out of memory"); return 0; }
+    if (!canvas_begin(&cv, cw, ch, EXPORT_MAXDIM)) { free(crop); free(frames); msg_setf("export: cannot create canvas"); return 0; }
     npix = (size_t)cv.w * cv.h;
     idx = (unsigned char *)malloc(npix);
-    if (!idx) { free(frames); canvas_end(&cv); msg_setf("export: out of memory"); return 0; }
+    if (!idx) { free(crop); free(frames); canvas_end(&cv); msg_setf("export: out of memory"); return 0; }
 
-    /* frame delay so a full turn lasts 360/speed seconds */
+    /* frame time derived from the rotation speed: a full turn takes
+     * 360/speed seconds, split evenly over the frames. */
     {
         double sp = g_speed > 0.1 ? g_speed : 15.0;
-        delay_cs = (int)(500.0 / sp + 0.5); if (delay_cs < 2) delay_cs = 2;
-        delay_ms = (int)(5000.0 / sp + 0.5); if (delay_ms < 20) delay_ms = 20;
+        double dt = (360.0 / (double)NF) / sp;      /* seconds per frame */
+        delay_cs = (int)(dt * 100.0 + 0.5);  if (delay_cs < 2) delay_cs = 2;
+        delay_num = (int)((360.0 / (double)NF) * 100.0);
+        delay_den = (int)(sp * 100.0);
+        if (delay_num < 1) delay_num = 1;
+        if (delay_den < 1) delay_den = 1;
     }
 
     if (apng) aw = apng_begin(path, cv.w, cv.h, NF, apngpal, trns, 1 + 2 * un);
     else      gw = gif_begin(path, cv.w, cv.h, gifpal, un + 1);
-    if (!aw && !gw) { free(idx); free(frames); canvas_end(&cv); msg_setf("export: cannot write file"); return 0; }
+    if (!aw && !gw) { free(idx); free(crop); free(frames); canvas_end(&cv); msg_setf("export: cannot write file"); return 0; }
 
     g_shattered = 0;
     for (i = 0; i < NF; ++i) {
         const char *fr = frames + fbytes * (size_t)i;
-        canvas_draw(&cv, fr, cols, rows);
-        for (r = 0; r < rows; ++r) {
-            for (g = 0; g < cols; ++g) {
-                int level = g_ramp_rev[(unsigned char)fr[(size_t)r * cols + g]];
+        for (r = 0; r < ch; ++r)
+            memcpy(crop + (size_t)r * cw, fr + (size_t)(minr + r) * cols + minc, (size_t)cw);
+        canvas_draw(&cv, crop, cw, ch);
+        for (r = 0; r < ch; ++r) {
+            for (g = 0; g < cw; ++g) {
+                int level = g_ramp_rev[(unsigned char)crop[(size_t)r * cw + g]];
                 int py0 = r * cv.cellH, px0 = g * cv.cellW, y, x;
                 int pal255, pal128, gpal;
                 if (level < 0) level = 0;
@@ -2247,7 +2268,7 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
                 }
             }
         }
-        if (apng) apng_frame(aw, idx, delay_ms, 1000);
+        if (apng) apng_frame(aw, idx, delay_num, delay_den);
         else      gif_frame(gw, idx, delay_cs);
         if ((i & 3) == 3) export_status(h_out, is_console, i + 1, NF);
     }
@@ -2257,7 +2278,7 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
     if (apng) rc = apng_end(aw); else rc = gif_end(gw);
     {
         int W = cv.w, H = cv.h;
-        free(idx); free(frames); canvas_end(&cv);
+        free(idx); free(crop); free(frames); canvas_end(&cv);
         if (rc) msg_setf("saved %ls (%dx%d, %d frames)", path, W, H, NF);
         else    msg_setf("export: write failed");
     }

@@ -4,6 +4,16 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.13] - 2026-10-09
+
+### Changed
+- Animation export now crops the image to the bounding box of the characters
+  actually drawn (HUD excluded), so the aspect follows the model instead of the
+  terminal. The 1280 px limit applies to the cropped image.
+- The time between frames is derived from the spin speed (a full turn lasts
+  `360/speed` seconds); the APNG frame delay is now expressed exactly as
+  `(360/NF)/speed` instead of a rounded millisecond value.
+
 ## [0.2.12] - 2026-10-09
 
 ### Changed

@@ -51,10 +51,12 @@ Prebuilt Windows x64 binaries are on the
   while it turns.
 - **Animation export.** Press `g` (GIF) or `p` (animated PNG) to write one full
   360-degree turn with the current colours, tilt and spin speed to
-  `ascii3D_<shape>.gif` / `.png` in the working directory. Transparent
-  background, no HUD. The image is scaled so its longest side is at most
-  **1280 px**, and the palette contains **only the colours actually used**
-  (GIF via LZW; PNG as a palette image with a few alpha levels).
+  `ascii3D_<shape>.gif` / `.png` in the working directory. The image is cropped
+  to the characters that are actually drawn (no HUD), so its aspect follows the
+  model rather than the terminal; the longest side is at most **1280 px**, and
+  the palette holds **only the colours actually used** (GIF via LZW; PNG as a
+  palette image with a few alpha levels). The time between frames follows the
+  spin speed (a full turn lasts `360/speed` seconds).
 - **FPS readout.** Press `Pos1` / `Home` to toggle a frames-per-second display
   in the bottom-left corner.
 - **Always spinning.** The solid rotates around the vertical (z) axis at
@@ -311,7 +313,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.12**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.13**. See [changelog.md](changelog.md) for details.
 
 ## Roadmap
 
