@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.11
+ * 3D ASCII Rotator - version 0.2.12
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -48,7 +48,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.11"
+#define APP_VERSION "0.2.12"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -2031,28 +2031,44 @@ typedef struct {
     int      w, h, cellW, cellH;
 } Canvas;
 
-static int canvas_begin(Canvas *cv, int cols, int rows, int cellH) {
+static int canvas_begin(Canvas *cv, int cols, int rows, int maxdim) {
     BITMAPINFO bmi;
     SIZE sz;
     HDC screen;
+    int cellH = 16, attempt;
 
     memset(cv, 0, sizeof(*cv));
     screen = GetDC(NULL);
     cv->hdc = CreateCompatibleDC(screen);
     if (screen) ReleaseDC(NULL, screen);
     if (!cv->hdc) return 0;
-    cv->cellH = cellH;
-    cv->font = CreateFontW(-cellH, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                           OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-                           FIXED_PITCH | FF_MODERN, L"Consolas");
-    if (!cv->font)
-        cv->font = CreateFontW(-cellH, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                               OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-                               FIXED_PITCH | FF_MODERN, L"Courier New");
-    if (!cv->font) { DeleteDC(cv->hdc); cv->hdc = NULL; return 0; }
-    cv->oldfont = (HFONT)SelectObject(cv->hdc, cv->font);
-    if (!GetTextExtentPoint32W(cv->hdc, L"X", 1, &sz) || sz.cx < 1) sz.cx = cellH / 2;
-    cv->cellW = sz.cx;
+
+    /* Pick a cell height so the longest image side stays within maxdim. */
+    for (attempt = 0; attempt < 4; ++attempt) {
+        HFONT f = CreateFontW(-cellH, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                              OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+                              FIXED_PITCH | FF_MODERN, L"Consolas");
+        if (!f)
+            f = CreateFontW(-cellH, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                            OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+                            FIXED_PITCH | FF_MODERN, L"Courier New");
+        if (!f) { DeleteDC(cv->hdc); cv->hdc = NULL; return 0; }
+        if (cv->oldfont) SelectObject(cv->hdc, cv->oldfont);
+        if (cv->font) DeleteObject(cv->font);
+        cv->font = f;
+        cv->oldfont = (HFONT)SelectObject(cv->hdc, cv->font);
+        if (!GetTextExtentPoint32W(cv->hdc, L"X", 1, &sz) || sz.cx < 1) sz.cx = cellH / 2;
+        cv->cellW = sz.cx;
+        cv->cellH = cellH;
+        if ((long)cols * cv->cellW <= maxdim && (long)rows * cellH <= maxdim) break;
+        {
+            long m = (long)cols * cv->cellW > (long)rows * cellH ? (long)cols * cv->cellW : (long)rows * cellH;
+            int nh = (int)((double)cellH * (double)maxdim / (double)m * 0.97);
+            if (nh >= cellH) nh = cellH - 1;
+            if (nh < 4) nh = 4;
+            cellH = nh;
+        }
+    }
     cv->w = cols * cv->cellW;
     cv->h = rows * cv->cellH;
     memset(&bmi, 0, sizeof(bmi));
@@ -2102,21 +2118,27 @@ static void export_status(HANDLE h, int is_console, int i, int n) {
 }
 
 /* Export a full 360-degree turn to `path` (GIF if apng==0, else APNG). */
+#define EXPORT_MAXDIM 1280
 static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, int rows, int apng) {
     const int NF = 72;                 /* 5 degrees per frame */
     Canvas cv;
     unsigned char grad_rgb[RAMP_N * 3];
-    unsigned char gifpal[16 * 3];
-    unsigned char *idx = NULL, *rgba = NULL;
+    unsigned char gifpal[32 * 3];
+    unsigned char apngpal[64 * 3];
+    unsigned char trns[64];
+    unsigned char *idx = NULL;
+    char *frames = NULL;
     GifWriter *gw = NULL;
     ApngWriter *aw = NULL;
     wchar_t path[300];
     char name[80];
-    int i, r, g, b, rc = 0, cellH = 16;
+    int i, r, g, b, rc = 0;
+    int used[RAMP_N], gifmap[RAMP_N], apng255[RAMP_N], apng128[RAMP_N];
+    int un = 0;
     double save_angle = g_angle;
     int save_shat = g_shattered;
     int delay_cs, delay_ms;
-    size_t npix;
+    size_t npix, fbytes;
 
     if (cols <= 0 || rows <= 0) return 0;
 
@@ -2127,11 +2149,51 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
         grad_rgb[i * 3 + 1] = (unsigned char)g;
         grad_rgb[i * 3 + 2] = (unsigned char)b;
     }
+
+    /* ---- pass 1: render each frame once, keep it, and record used colours */
+    fbytes = (size_t)cols * rows;
+    frames = (char *)malloc(fbytes * NF);
+    if (!frames) { msg_setf("export: out of memory"); return 0; }
+    memset(used, 0, sizeof(used));
+    g_shattered = 0;
+    for (i = 0; i < NF; ++i) {
+        g_angle = (double)i * (2.0 * PI / (double)NF);
+        render_grid(grid, cols, rows);
+        memcpy(frames + fbytes * (size_t)i, grid, fbytes);
+        for (r = 0; r < rows; ++r) {
+            const char *row = grid + (size_t)r * cols;
+            for (g = 0; g < cols; ++g) {
+                int level = g_ramp_rev[(unsigned char)row[g]];
+                if (level > 0) used[level] = 1;
+            }
+        }
+        if ((i & 7) == 7) export_status(h_out, is_console, i + 1, NF);
+    }
+    g_angle = save_angle;
+
+    /* ---- build both palettes from only the colours actually used --------- */
     memset(gifpal, 0, sizeof(gifpal));
+    memset(apngpal, 0, sizeof(apngpal));
+    memset(trns, 0, sizeof(trns));
+    for (i = 0; i < RAMP_N; ++i) { gifmap[i] = 0; apng255[i] = 0; apng128[i] = 0; }
     for (i = 1; i < RAMP_N; ++i) {
-        gifpal[i * 3 + 0] = grad_rgb[i * 3 + 0];
-        gifpal[i * 3 + 1] = grad_rgb[i * 3 + 1];
-        gifpal[i * 3 + 2] = grad_rgb[i * 3 + 2];
+        unsigned char R, G, B;
+        int k;
+        if (!used[i]) continue;
+        R = grad_rgb[i * 3]; G = grad_rgb[i * 3 + 1]; B = grad_rgb[i * 3 + 2];
+        for (k = 0; k < un; ++k)
+            if (gifpal[(k + 1) * 3] == R && gifpal[(k + 1) * 3 + 1] == G && gifpal[(k + 1) * 3 + 2] == B) break;
+        if (k == un) {                       /* new colour */
+            gifpal[(un + 1) * 3] = R; gifpal[(un + 1) * 3 + 1] = G; gifpal[(un + 1) * 3 + 2] = B;
+            apngpal[(1 + 2 * un) * 3] = R; apngpal[(1 + 2 * un) * 3 + 1] = G; apngpal[(1 + 2 * un) * 3 + 2] = B;
+            apngpal[(2 + 2 * un) * 3] = R; apngpal[(2 + 2 * un) * 3 + 1] = G; apngpal[(2 + 2 * un) * 3 + 2] = B;
+            trns[1 + 2 * un] = 255;
+            trns[2 + 2 * un] = 128;
+            ++un;
+        }
+        gifmap[i]  = k + 1;
+        apng255[i] = 1 + 2 * k;
+        apng128[i] = 2 + 2 * k;
     }
 
     /* file name from the shape name (sanitised) */
@@ -2146,11 +2208,10 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
     }
     _snwprintf(path, 300, L"ascii3D_%hs.%hs", name, apng ? "png" : "gif");
 
-    if (!canvas_begin(&cv, cols, rows, cellH)) { msg_setf("export: cannot create canvas"); return 0; }
+    if (!canvas_begin(&cv, cols, rows, EXPORT_MAXDIM)) { free(frames); msg_setf("export: cannot create canvas"); return 0; }
     npix = (size_t)cv.w * cv.h;
-    idx  = (unsigned char *)malloc(npix);
-    rgba = (unsigned char *)malloc(npix * 4);
-    if (!idx || !rgba) { free(idx); free(rgba); canvas_end(&cv); msg_setf("export: out of memory"); return 0; }
+    idx = (unsigned char *)malloc(npix);
+    if (!idx) { free(frames); canvas_end(&cv); msg_setf("export: out of memory"); return 0; }
 
     /* frame delay so a full turn lasts 360/speed seconds */
     {
@@ -2159,38 +2220,34 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
         delay_ms = (int)(5000.0 / sp + 0.5); if (delay_ms < 20) delay_ms = 20;
     }
 
-    if (apng) aw = apng_begin(path, cv.w, cv.h, NF);
-    else      gw = gif_begin(path, cv.w, cv.h, gifpal, RAMP_N);
-    if (!aw && !gw) { free(idx); free(rgba); canvas_end(&cv); msg_setf("export: cannot write file"); return 0; }
+    if (apng) aw = apng_begin(path, cv.w, cv.h, NF, apngpal, trns, 1 + 2 * un);
+    else      gw = gif_begin(path, cv.w, cv.h, gifpal, un + 1);
+    if (!aw && !gw) { free(idx); free(frames); canvas_end(&cv); msg_setf("export: cannot write file"); return 0; }
 
     g_shattered = 0;
     for (i = 0; i < NF; ++i) {
-        g_angle = (double)i * (2.0 * PI / (double)NF);
-        render_grid(grid, cols, rows);
-        canvas_draw(&cv, grid, cols, rows);
-        /* colour every pixel from its cell's ramp level and the mask */
+        const char *fr = frames + fbytes * (size_t)i;
+        canvas_draw(&cv, fr, cols, rows);
         for (r = 0; r < rows; ++r) {
             for (g = 0; g < cols; ++g) {
-                int level = g_ramp_rev[(unsigned char)grid[(size_t)r * cols + g]];
+                int level = g_ramp_rev[(unsigned char)fr[(size_t)r * cols + g]];
                 int py0 = r * cv.cellH, px0 = g * cv.cellW, y, x;
-                unsigned char R = 0, G = 0, B = 0;
-                if (level > 0) { R = grad_rgb[level * 3]; G = grad_rgb[level * 3 + 1]; B = grad_rgb[level * 3 + 2]; }
+                int pal255, pal128, gpal;
+                if (level < 0) level = 0;
+                pal255 = apng255[level]; pal128 = apng128[level]; gpal = gifmap[level];
                 for (y = 0; y < cv.cellH; ++y) {
                     size_t base = (size_t)(py0 + y) * cv.w + px0;
                     for (x = 0; x < cv.cellW; ++x) {
                         size_t pi = base + x;
                         unsigned m = cv.bits[pi * 4 + 2];
-                        if (apng) {
-                            rgba[pi * 4 + 0] = R; rgba[pi * 4 + 1] = G;
-                            rgba[pi * 4 + 2] = B; rgba[pi * 4 + 3] = (level > 0) ? (unsigned char)m : 0;
-                        } else {
-                            idx[pi] = (level > 0 && m >= 128) ? (unsigned char)level : 0;
-                        }
+                        if (level <= 0 || m < 64) idx[pi] = 0;
+                        else if (apng) idx[pi] = (unsigned char)(m >= 192 ? pal255 : pal128);
+                        else           idx[pi] = (m >= 128) ? (unsigned char)gpal : 0;
                     }
                 }
             }
         }
-        if (apng) apng_frame(aw, rgba, delay_ms, 1000);
+        if (apng) apng_frame(aw, idx, delay_ms, 1000);
         else      gif_frame(gw, idx, delay_cs);
         if ((i & 3) == 3) export_status(h_out, is_console, i + 1, NF);
     }
@@ -2200,7 +2257,7 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
     if (apng) rc = apng_end(aw); else rc = gif_end(gw);
     {
         int W = cv.w, H = cv.h;
-        free(idx); free(rgba); canvas_end(&cv);
+        free(idx); free(frames); canvas_end(&cv);
         if (rc) msg_setf("saved %ls (%dx%d, %d frames)", path, W, H, NF);
         else    msg_setf("export: write failed");
     }

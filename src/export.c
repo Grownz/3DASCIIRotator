@@ -326,7 +326,9 @@ static int png_chunk(FILE *f, const char *type, const unsigned char *data, size_
     return 1;
 }
 
-ApngWriter *apng_begin(const wchar_t *file, int w, int h, int nframes) {
+ApngWriter *apng_begin(const wchar_t *file, int w, int h, int nframes,
+                       const unsigned char *palette_rgb,
+                       const unsigned char *trns, int palette_n) {
     ApngWriter *a;
     FILE *f;
     Buf ihdr, actl;
@@ -342,10 +344,13 @@ ApngWriter *apng_begin(const wchar_t *file, int w, int h, int nframes) {
     memset(&ihdr, 0, sizeof(ihdr));
     buf_u32be(&ihdr, (unsigned)w); buf_u32be(&ihdr, (unsigned)h);
     buf_u8(&ihdr, 8);        /* bit depth */
-    buf_u8(&ihdr, 6);        /* colour type RGBA */
+    buf_u8(&ihdr, 3);        /* colour type: palette */
     buf_u8(&ihdr, 0); buf_u8(&ihdr, 0); buf_u8(&ihdr, 0);
     png_chunk(f, "IHDR", ihdr.p, ihdr.n);
     free(ihdr.p);
+
+    png_chunk(f, "PLTE", palette_rgb, (size_t)palette_n * 3);
+    if (trns) png_chunk(f, "tRNS", trns, (size_t)palette_n);
 
     memset(&actl, 0, sizeof(actl));
     buf_u32be(&actl, (unsigned)(nframes > 0 ? nframes : 1));
@@ -355,7 +360,7 @@ ApngWriter *apng_begin(const wchar_t *file, int w, int h, int nframes) {
     return a;
 }
 
-int apng_frame(ApngWriter *a, const unsigned char *rgba, int delay_num, int delay_den) {
+int apng_frame(ApngWriter *a, const unsigned char *idx, int delay_num, int delay_den) {
     Buf raw, fcTL, comp;
     Bits bits;
     int y;
@@ -364,7 +369,7 @@ int apng_frame(ApngWriter *a, const unsigned char *rgba, int delay_num, int dela
     memset(&raw, 0, sizeof(raw));
     for (y = 0; y < a->h; ++y) {
         buf_u8(&raw, 0);                                  /* filter: none */
-        buf_write(&raw, rgba + (size_t)y * a->w * 4, (size_t)a->w * 4);
+        buf_write(&raw, idx + (size_t)y * a->w, (size_t)a->w);
     }
 
     memset(&comp, 0, sizeof(comp));

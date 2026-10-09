@@ -4,6 +4,16 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.12] - 2026-10-09
+
+### Changed
+- Animation export (`g` / `p`) now scales the image so its **longest side is at
+  most 1280 px** (smaller terminals are unchanged).
+- The exported palette now contains **only the colours actually used** in the
+  animation (determined in a first render pass). GIF keeps its LZW encoding; the
+  APNG is now a **palette PNG** (colour type 3) with a few alpha levels for the
+  edges, which is several times smaller than the previous RGBA output.
+
 ## [0.2.11] - 2026-10-09
 
 ### Added

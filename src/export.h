@@ -22,8 +22,11 @@ GifWriter *gif_begin(const wchar_t *path, int w, int h,
 int        gif_frame(GifWriter *g, const unsigned char *idx, int delay_cs);
 int        gif_end(GifWriter *g);
 
-ApngWriter *apng_begin(const wchar_t *path, int w, int h, int nframes);
-int         apng_frame(ApngWriter *a, const unsigned char *rgba,
+/* Palette PNG (colour type 3) with per-entry alpha (tRNS), 8-bit indices. */
+ApngWriter *apng_begin(const wchar_t *path, int w, int h, int nframes,
+                       const unsigned char *palette_rgb,
+                       const unsigned char *trns, int palette_n);
+int         apng_frame(ApngWriter *a, const unsigned char *idx,
                        int delay_num, int delay_den);
 int         apng_end(ApngWriter *a);
 
