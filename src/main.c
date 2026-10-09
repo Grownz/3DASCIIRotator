@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.6
+ * 3D ASCII Rotator - version 0.2.7
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -45,7 +45,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.6"
+#define APP_VERSION "0.2.7"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -102,9 +102,7 @@ static int          g_menu_start = 0;              /* --menu (snapshot preview) 
 static int          g_lod_arg = -1;                /* --lod level (snapshot) */
 static int          g_bench = 0;                   /* --bench <frames>      */
 static int          g_target_fps = 60;             /* --fps (0 = unlimited) */
-static int          g_font_level = 3;              /* console font size 1..5 */
-static CONSOLE_FONT_INFOEX g_font_base;
-static int          g_font_base_valid = 0;
+static int          g_font_level = 3;              /* font size 1..5 (3 = native) */
 
 /* --- status message (auto-hides), FPS HUD, shape colour, menu slider ----- */
 static int    g_show_fps = 0;
@@ -211,6 +209,15 @@ static void color_step(int *sel, int *color, int delta) {
     if (*sel >= COLOR_N) *sel = COLOR_N - 1;
     *color = COLORS[*sel];
     grad_build();
+}
+
+/* Font size -> character block size. Level 3 is the native resolution; larger
+ * levels draw every character as a bigger block (coarser art, same model size).
+ * Levels 1 and 2 cannot be finer than the native grid, so they equal level 3. */
+static int font_block(void) {
+    if (g_font_level >= 5) return 3;
+    if (g_font_level == 4) return 2;
+    return 1;
 }
 
 static void msg_setf(const char *fmt, ...) {
@@ -1024,8 +1031,8 @@ static void render_rows(int r0, int r1, void *vctx) {
     }
 }
 
-/* Fill a cols*rows character grid with the current shape. */
-static void render_grid(char *grid, int cols, int rows) {
+/* Render the shape into a cols*rows grid at the given resolution. */
+static void render_core(char *grid, int cols, int rows) {
     double aspect = CHAR_ASPECT * (double)cols / (double)rows;
     RenderCtx ctx;
 
@@ -1074,6 +1081,38 @@ static void render_grid(char *grid, int cols, int rows) {
     pool_run(render_rows, &ctx, rows);
     ctx.pass = 2;
     pool_run(render_rows, &ctx, rows);
+}
+
+/* Render with the current font size. For a block size > 1 the shape is drawn at
+ * a coarser virtual resolution and every virtual cell is expanded to a block of
+ * real cells, so the characters look bigger while the model keeps its size. */
+static void render_grid(char *grid, int cols, int rows) {
+    int block = font_block();
+    int vc, vr, r, c;
+    static char *vg = NULL;
+    static int   vg_cap = 0;
+
+    if (block <= 1 || cols < block || rows < block) {
+        render_core(grid, cols, rows);
+        return;
+    }
+    vc = cols / block;
+    vr = rows / block;
+    if (vc < 1) vc = 1;
+    if (vr < 1) vr = 1;
+    if (vc * vr > vg_cap) {
+        char *p = (char *)realloc(vg, (size_t)vc * vr);
+        if (!p) { render_core(grid, cols, rows); return; }
+        vg = p; vg_cap = vc * vr;
+    }
+    render_core(vg, vc, vr);
+    for (r = 0; r < rows; ++r) {
+        int srow = (int)((long)r * vr / rows) * vc;
+        for (c = 0; c < cols; ++c) {
+            int scol = (int)((long)c * vc / cols);
+            grid[(size_t)r * cols + c] = vg[srow + scol];
+        }
+    }
 }
 
 /* Overlay the status line in the top-left corner. */
@@ -1803,7 +1842,8 @@ static void print_help(void) {
         "      --menu           With --snapshot: draw the model list (preview)\n"
         "      --lod <level>    With --snapshot: apply an LOD level (0..%d)\n"
         "      --bench <frames> Benchmark offscreen rendering and exit\n"
-        "      --fps <n>        Frame-rate cap for interactive mode (default 60)\n\n"
+        "      --fps <n>        Frame-rate cap for interactive mode (default 60)\n"
+        "      --font <n>       Font size 1..5 (3 = native; 4/5 = 2x2/3x3 blocks)\n\n"
         "Controls (interactive):\n"
         "  ESC                  Quit\n"
         "  +                    Increase spin by %d deg/s (max %d deg/s)\n"
@@ -1818,8 +1858,8 @@ static void print_help(void) {
         "  LEFT / RIGHT         In the list: move the mesh-colour slider\n"
         "                       (256-colour scale, applied live)\n"
         "  SHIFT+LEFT / RIGHT   Move the light-source colour slider\n"
-        "  1 .. 5               Console font size (3 = current); the model keeps\n"
-        "                       the same size\n"
+        "  1 .. 5               Font size (3 = native); 4/5 draw each character\n"
+        "                       as a 2x2 / 3x3 block (bigger, same model size)\n"
         "  PAGE UP / PAGE DOWN  Weaker / stronger LOD for meshes that were\n"
         "                       reduced from too many triangles\n"
         "  POS1 (HOME)          Toggle the FPS display (bottom-left)\n"
@@ -1872,6 +1912,14 @@ static int parse_args(int argc, char **argv) {
             g_target_fps = atoi(argv[++i]);
             if (g_target_fps < 0) g_target_fps = 0;
             if (g_target_fps > 240) g_target_fps = 240;
+        } else if (_stricmp(a, "--font") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "error: --font requires a value\n");
+                return 0;
+            }
+            g_font_level = atoi(argv[++i]);
+            if (g_font_level < 1) g_font_level = 1;
+            if (g_font_level > 5) g_font_level = 5;
         } else if (_stricmp(a, "-s") == 0 || _stricmp(a, "--shape") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "error: %s requires a value\n", a);
@@ -1949,35 +1997,6 @@ static void precise_sleep(double sec) {
         }
     }
     Sleep((DWORD)(sec * 1000.0 + 0.5));
-}
-
-/* ---- console font size (keys 1..5): level 3 is the current size ---------- */
-static void font_query(HANDLE h) {
-    g_font_base.cbSize = sizeof(g_font_base);
-    g_font_base_valid = GetCurrentConsoleFontEx(h, FALSE, &g_font_base) ? 1 : 0;
-}
-
-static void font_apply(HANDLE h, int level) {
-    static const double f[5] = { 0.60, 0.80, 1.00, 1.30, 1.65 };
-    CONSOLE_FONT_INFOEX cfx;
-    int h0;
-    if (level < 1) level = 1;
-    if (level > 5) level = 5;
-    g_font_level = level;
-    if (!g_font_base_valid) return;
-    h0 = g_font_base.dwFontSize.Y;
-    if (h0 <= 0) return;
-    cfx = g_font_base;
-    cfx.cbSize = sizeof(cfx);
-    cfx.dwFontSize.X = 0;                          /* 0 = let the console pick */
-    cfx.dwFontSize.Y = (SHORT)(h0 * f[level - 1] + 0.5);
-    if (cfx.dwFontSize.Y < 6)   cfx.dwFontSize.Y = 6;
-    if (cfx.dwFontSize.Y > 128) cfx.dwFontSize.Y = 128;
-    if (!SetCurrentConsoleFontEx(h, FALSE, &cfx))
-        msg_setf("font size %d not supported by this terminal", level);
-    else
-        msg_setf("font size %d", level);
-    g_scale_mesh = NULL;                           /* force a re-fit */
 }
 
 /* Offscreen render benchmark: renders `frames` frames over one full turn and
@@ -2106,7 +2125,6 @@ int main(int argc, char **argv) {
                           & ~((DWORD)ENABLE_QUICK_EDIT_MODE));
     SetConsoleTitleA(APP_NAME " " APP_VERSION " - press ESC to quit");
     SetConsoleCtrlHandler(on_ctrl, TRUE);
-    font_query(h_out);
     write_all(h_out, is_console, "\x1b[?1049h\x1b[?25l", -1);
 
     angle_deg = g_start_angle;
@@ -2148,7 +2166,7 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_PRIOR) apply_lod(-1);
                                 else if (vk == VK_NEXT)  apply_lod(1);
                                 else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
-                                else if (ch >= '1' && ch <= '5') font_apply(h_out, ch - '0');
+                                else if (ch >= '1' && ch <= '5') { int b; g_font_level = ch - '0'; g_scale_mesh = NULL; b = font_block(); msg_setf("font size %d (%s)", g_font_level, b == 1 ? "native" : b == 2 ? "2x2 blocks" : "3x3 blocks"); }
                                 else if (vk == VK_LEFT)  { if (cks & SHIFT_PRESSED) color_step(&g_light_sel, &g_light_color, -1); else color_step(&g_color_sel, &g_fg_color, -1); }
                                 else if (vk == VK_RIGHT) { if (cks & SHIFT_PRESSED) color_step(&g_light_sel, &g_light_color,  1); else color_step(&g_color_sel, &g_fg_color,  1); }
                                 else if (ch == 'q' || ch == 'Q') g_running = 0;
@@ -2174,7 +2192,7 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_PRIOR) apply_lod(-1);
                                 else if (vk == VK_NEXT)  apply_lod(1);
                                 else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
-                                else if (ch >= '1' && ch <= '5') font_apply(h_out, ch - '0');
+                                else if (ch >= '1' && ch <= '5') { int b; g_font_level = ch - '0'; g_scale_mesh = NULL; b = font_block(); msg_setf("font size %d (%s)", g_font_level, b == 1 ? "native" : b == 2 ? "2x2 blocks" : "3x3 blocks"); }
                                 else if (ch == 'r' || ch == 'R') models_poll(1);
                             }
                         } else if (r->EventType == MOUSE_EVENT && g_menu_open) {

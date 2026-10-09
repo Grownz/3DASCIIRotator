@@ -4,6 +4,19 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.7] - 2026-10-09
+
+### Changed
+- The font-size keys `1`..`5` now use terminal-independent **block scaling**
+  instead of the console font API (which Windows Terminal ignores). Level `3`
+  is the native resolution; levels `4` and `5` draw every character as a
+  2x2 / 3x3 block, so the art looks chunkier while the model keeps its size.
+  Levels `1`/`2` match level `3` (finer than native would need a real font
+  change, which terminals do not allow).
+
+### Added
+- `--font <n>` to set the character size from the command line.
+
 ## [0.2.6] - 2026-10-09
 
 ### Added
