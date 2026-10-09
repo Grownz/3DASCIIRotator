@@ -4,6 +4,13 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.9] - 2026-10-09
+
+### Changed
+- Pressing `1`/`2` where the terminal does not allow font changes now shows a
+  hint to use `Ctrl`+`-` / `Ctrl`+`+` (Windows Terminal) instead of silently
+  doing nothing. readme and `--help` explain the same.
+
 ## [0.2.8] - 2026-10-09
 
 ### Changed

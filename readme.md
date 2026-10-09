@@ -50,7 +50,9 @@ Prebuilt Windows x64 binaries are on the
   resized (`1`/`2` smaller, `4`/`5` larger) and the model is re-fitted so it
   keeps its size. Where the terminal does not allow font changes (Windows
   Terminal ignores them), levels `4`/`5` instead draw every character as a
-  2x2 / 3x3 block (chunkier art, same model size) and `1`/`2` match `3`.
+  2x2 / 3x3 block (chunkier art, same model size) and `1`/`2` match `3` — there,
+  use **`Ctrl`+`-` / `Ctrl`+`+`** (or `Ctrl`+scroll) to make the font smaller /
+  larger; the model re-fits and keeps its size.
 - **FPS readout.** Press `Pos1` / `Home` to toggle a frames-per-second display
   in the bottom-left corner.
 - **Always spinning.** The solid rotates around the vertical (z) axis at
@@ -305,7 +307,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.8**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.9**. See [changelog.md](changelog.md) for details.
 
 ## Roadmap
 

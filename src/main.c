@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.8
+ * 3D ASCII Rotator - version 0.2.9
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -45,7 +45,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.8"
+#define APP_VERSION "0.2.9"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -1865,6 +1865,8 @@ static void print_help(void) {
         "  1 .. 5               Font size: in the classic console the real font is\n"
         "                       resized; where that is not allowed, 4/5 draw each\n"
         "                       character as a 2x2 / 3x3 block (same model size)\n"
+        "                       and 1/2 stay native (in Windows Terminal use\n"
+        "                       Ctrl+Minus / Ctrl+Plus to change the font)\n"
         "  PAGE UP / PAGE DOWN  Weaker / stronger LOD for meshes that were\n"
         "                       reduced from too many triangles\n"
         "  POS1 (HOME)          Toggle the FPS display (bottom-left)\n"
@@ -2232,7 +2234,7 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_PRIOR) apply_lod(-1);
                                 else if (vk == VK_NEXT)  apply_lod(1);
                                 else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
-                                else if ((ch >= '1' && ch <= '5') || (vk >= '1' && vk <= '5')) { int lvl = (ch >= '1' && ch <= '5') ? (ch - '0') : (vk - '0'); int b; font_apply(h_out, lvl); g_scale_mesh = NULL; b = font_block(); if (g_font_api == 1) msg_setf("font size %d", lvl); else msg_setf("font size %d (%s)", lvl, b == 1 ? "native" : b == 2 ? "2x2 blocks" : "3x3 blocks"); }
+                                else if ((ch >= '1' && ch <= '5') || (vk >= '1' && vk <= '5')) { int lvl = (ch >= '1' && ch <= '5') ? (ch - '0') : (vk - '0'); int b; font_apply(h_out, lvl); g_scale_mesh = NULL; b = font_block(); if (g_font_api == 1) msg_setf("font size %d", lvl); else if (b > 1) msg_setf("font size %d (%s)", lvl, b == 2 ? "2x2 blocks" : "3x3 blocks"); else msg_setf("font size %d (native) - use Ctrl+Minus in Windows Terminal for finer", lvl); }
                                 else if (vk == VK_LEFT)  { if (cks & SHIFT_PRESSED) color_step(&g_light_sel, &g_light_color, -1); else color_step(&g_color_sel, &g_fg_color, -1); }
                                 else if (vk == VK_RIGHT) { if (cks & SHIFT_PRESSED) color_step(&g_light_sel, &g_light_color,  1); else color_step(&g_color_sel, &g_fg_color,  1); }
                                 else if (ch == 'q' || ch == 'Q') g_running = 0;
@@ -2258,7 +2260,7 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_PRIOR) apply_lod(-1);
                                 else if (vk == VK_NEXT)  apply_lod(1);
                                 else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
-                                else if ((ch >= '1' && ch <= '5') || (vk >= '1' && vk <= '5')) { int lvl = (ch >= '1' && ch <= '5') ? (ch - '0') : (vk - '0'); int b; font_apply(h_out, lvl); g_scale_mesh = NULL; b = font_block(); if (g_font_api == 1) msg_setf("font size %d", lvl); else msg_setf("font size %d (%s)", lvl, b == 1 ? "native" : b == 2 ? "2x2 blocks" : "3x3 blocks"); }
+                                else if ((ch >= '1' && ch <= '5') || (vk >= '1' && vk <= '5')) { int lvl = (ch >= '1' && ch <= '5') ? (ch - '0') : (vk - '0'); int b; font_apply(h_out, lvl); g_scale_mesh = NULL; b = font_block(); if (g_font_api == 1) msg_setf("font size %d", lvl); else if (b > 1) msg_setf("font size %d (%s)", lvl, b == 2 ? "2x2 blocks" : "3x3 blocks"); else msg_setf("font size %d (native) - use Ctrl+Minus in Windows Terminal for finer", lvl); }
                                 else if (ch == 'r' || ch == 'R') models_poll(1);
                             }
                         } else if (r->EventType == MOUSE_EVENT && g_menu_open) {
