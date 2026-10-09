@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.9
+ * 3D ASCII Rotator - version 0.2.10
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -45,7 +45,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.9"
+#define APP_VERSION "0.2.10"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -102,9 +102,6 @@ static int          g_menu_start = 0;              /* --menu (snapshot preview) 
 static int          g_lod_arg = -1;                /* --lod level (snapshot) */
 static int          g_bench = 0;                   /* --bench <frames>      */
 static int          g_target_fps = 60;             /* --fps (0 = unlimited) */
-static int          g_font_level = 3;              /* font size 1..5 (3 = native) */
-static int          g_font_api = -1;               /* -1 unknown, 1 works, 0 unavailable */
-static CONSOLE_FONT_INFOEX g_font_base;
 
 /* --- status message (auto-hides), FPS HUD, shape colour, menu slider ----- */
 static int    g_show_fps = 0;
@@ -213,16 +210,6 @@ static void color_step(int *sel, int *color, int delta) {
     grad_build();
 }
 
-/* Font size -> character block size. If the console font API works we change the
- * real font and never block-scale. Otherwise level 3 is the native resolution;
- * levels 4/5 draw every character as a bigger block (coarser art, same size). */
-static int font_block(void) {
-    if (g_font_api == 1) return 1;
-    if (g_font_level >= 5) return 3;
-    if (g_font_level == 4) return 2;
-    return 1;
-}
-
 static void msg_setf(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -319,6 +306,7 @@ typedef struct {
     double   elev;    /* camera elevation used for this shape              */
     double   zoom;    /* multiplier on the auto-fit scale                  */
     float   *tdata;   /* ntri*9: the three vertices, packed per triangle   */
+    int      fit_stride; /* vertex sampling stride for the silhouette fit  */
     float    bmin[3], bmax[3]; /* object-space bounding box                 */
     int      owned;   /* 1 = verts/tris are malloc'd (free on destroy)     */
     int      built;   /* 1 = BVH is built                                  */
@@ -528,6 +516,7 @@ static void mesh_build(MeshDef *m) {
             if (v[k] > m->bmax[k]) m->bmax[k] = v[k];
         }
     }
+    m->fit_stride = (m->nvert > 20000) ? (m->nvert / 20000) : 1;
     m->built = 1;
 }
 
@@ -544,48 +533,94 @@ static void mesh_destroy(MeshDef *m) {
     free(m);
 }
 
-/* Does the mesh fit at scale s and spin angle (ca, sa)? Uses the object-space
- * bounding box; the caller samples several spin angles so the chosen scale is
- * constant while the model rotates. */
-static int mesh_fits_ang(const MeshDef *m, double s, double hw, double hh, double ca, double sa) {
-    double e = m->elev * (PI / 180.0), ce = cos(e), se = sin(e);
+/* ------------------------------------------------------------------ fitting
+ * The model is scaled so that its *silhouette* (sampled points, not the loose
+ * bounding box) comes within FIT_MARGIN of the view, and so that it fits for
+ * every spin angle (the scale is therefore constant while the model turns).
+ * Points are object-space; g_fit_pts/g_fit_n describe the current shape.
+ */
+#define FIT_MARGIN 0.90          /* silhouette stays within 90% of the half view */
+
+static MeshDef *g_mesh;          /* defined with the registry below */
+
+static float *g_fit_pts = NULL;
+static int    g_fit_n = 0;
+static int    g_fit_stride = 1;
+
+static double compute_fit_scale(double aspect) {
+    double hw = VIEW_HALF * aspect, hh = VIEW_HALF;
+    double TX = FIT_MARGIN * hw, TZ = FIT_MARGIN * hh;
     double D = CAM_DIST;
-    int i;
-    for (i = 0; i < 8; ++i) {
-        double px = (i & 1) ? m->bmax[0] : m->bmin[0];
-        double py = (i & 2) ? m->bmax[1] : m->bmin[1];
-        double pz = (i & 4) ? m->bmax[2] : m->bmin[2];
-        double qx = px * ca - py * sa, qy = px * sa + py * ca, qz = pz;
-        double wx = qx, wy = qy * g_ct + qz * g_st, wz = -qy * g_st + qz * g_ct;
-        double den = D + s * (wy * ce - wz * se);
-        double hx, vz;
-        if (den <= 0.1) return 0;
-        hx = D * s * wx / den;
-        vz = D * s * (wy * se + wz * ce) / den;
-        if (fabs(hx) > 0.94 * hw) return 0;
-        if (fabs(vz) > 0.94 * hh) return 0;
+    double elev = g_mesh ? g_mesh->elev : CAM_ELEV;
+    double e = elev * (PI / 180.0), ce = cos(e), se = sin(e);
+    double best = 8.0;
+    int k, i;
+    if (!g_fit_pts || g_fit_n <= 0) return 1.0;
+    for (k = 0; k < 36; ++k) {
+        double a = (double)k * (2.0 * PI / 36.0);
+        double ca = cos(a), sa = sin(a);
+        double smax = 8.0;
+        for (i = 0; i < g_fit_n; i += g_fit_stride) {
+            const float *p = &g_fit_pts[(size_t)i * 3];
+            double qx = p[0] * ca - p[1] * sa, qy = p[0] * sa + p[1] * ca, qz = p[2];
+            double wx = qx, wy = qy * g_ct + qz * g_st, wz = -qy * g_st + qz * g_ct;
+            double dep = wy * ce - wz * se;
+            double ax = fabs(wx), az = fabs(wy * se + wz * ce);
+            double den, s;
+            if (dep < 0.0) { s = D * 0.98 / (-dep); if (s < smax) smax = s; }  /* keep in front */
+            den = D * ax - TX * dep;
+            if (den > 1e-9) { s = TX * D / den; if (s < smax) smax = s; }
+            den = D * az - TZ * dep;
+            if (den > 1e-9) { s = TZ * D / den; if (s < smax) smax = s; }
+        }
+        if (smax < best) best = smax;
     }
-    return 1;
+    if (best > 8.0) best = 8.0;
+    if (best < 0.0) best = 0.0;
+    if (g_mesh && g_mesh->zoom > 0.01) best *= g_mesh->zoom;
+    return best;
 }
 
-/* Largest scale that fits for *every* spin angle, so the model keeps the same
- * size while it turns. Depends on the tilt, which update_transform() has set. */
-static double mesh_scale(const MeshDef *m, double aspect) {
-    double hw = VIEW_HALF * aspect, hh = VIEW_HALF;
-    double best = 8.0;
-    int k;
-    for (k = 0; k < 48; ++k) {
-        double a = (double)k * (2.0 * PI / 48.0);
-        double ca = cos(a), sa = sin(a);
-        double lo = 0.0, hi = 8.0;
-        int i;
-        for (i = 0; i < 28; ++i) {
-            double mid = (lo + hi) * 0.5;
-            if (mesh_fits_ang(m, mid, hw, hh, ca, sa)) lo = mid; else hi = mid;
+/* Surface points of the current analytic SDF shape (marching inward from
+ * outside), so analytic shapes are fitted like meshes. */
+static double shape_sdf(v3 q);   /* defined with the analytic shapes below */
+static float g_acloud[3 * 2048];
+
+static void build_analytic_cloud(void) {
+    const int N = 1500;
+    int i, k;
+    g_fit_n = 0;
+    for (i = 0; i < N; ++i) {
+        double t = ((double)i + 0.5) / (double)N;
+        double z = 1.0 - 2.0 * t;
+        double rr = sqrt(fmax(0.0, 1.0 - z * z));
+        double phi = (double)i * 2.39996322972865332;
+        double dx = rr * cos(phi), dy = rr * sin(phi), dz = z;
+        double tt = 3.0;
+        for (k = 0; k < 64; ++k) {
+            v3 p = v3_make(dx * tt, dy * tt, dz * tt);
+            double d = shape_sdf(p);
+            if (d < 0.0) break;
+            tt -= d;
+            if (tt < 0.0) { tt = 0.0; break; }
         }
-        if (lo < best) best = lo;
+        g_acloud[g_fit_n * 3 + 0] = (float)(dx * tt);
+        g_acloud[g_fit_n * 3 + 1] = (float)(dy * tt);
+        g_acloud[g_fit_n * 3 + 2] = (float)(dz * tt);
+        ++g_fit_n;
     }
-    return best * (m->zoom > 0.01 ? m->zoom : 1.0);
+    g_fit_pts = g_acloud;
+    g_fit_stride = 1;
+}
+
+static void setup_fit_cloud(void) {
+    if (g_mesh) {
+        g_fit_pts = (float *)g_mesh->verts;
+        g_fit_n = g_mesh->nvert;
+        g_fit_stride = g_mesh->fit_stride > 0 ? g_mesh->fit_stride : 1;
+    } else {
+        build_analytic_cloud();
+    }
 }
 
 static MeshDef g_mesh_stego = { STEGO_VERT, STEGO_TRI, STEGO_NVERT, STEGO_NTRI,
@@ -622,7 +657,9 @@ static int        g_item_count = 0, g_item_cap = 0, g_item_index = 0;
 
 static MeshDef *g_mesh = NULL;        /* mesh of the current item, or NULL */
 static double   g_mesh_scale = 1.0;   /* current fit-to-view scale         */
+static double   g_analytic_scale = 1.0; /* fit scale for analytic shapes   */
 static MeshDef *g_scale_mesh = NULL;  /* cache key for the fit scale       */
+static int      g_scale_kind = -2;    /* cache key: analytic kind, or -1   */
 static double   g_scale_aspect = -1.0, g_scale_tilt = 1e9, g_scale_value = 1.0;
 static int      g_super = 1;          /* 1 = 2x2 supersample, 0 = single   */
 static int      g_analytic = SH_CUBE; /* analytic kind when g_mesh == NULL */
@@ -784,7 +821,12 @@ static double shape_sdf(v3 q) {
 
 static double world_sdf(v3 p) {
     /* map into the object frame (tilt the spin axis, then spin) */
-    return shape_sdf(to_object(p));
+    v3 q = to_object(p);
+    if (g_analytic_scale != 1.0) {
+        double inv = 1.0 / g_analytic_scale;
+        return g_analytic_scale * shape_sdf(v3_mul(q, inv));
+    }
+    return shape_sdf(q);
 }
 
 /* Surface normal from the SDF gradient. The tetrahedron technique needs only
@@ -1034,28 +1076,27 @@ static void render_rows(int r0, int r1, void *vctx) {
     }
 }
 
-/* Render the shape into a cols*rows grid at the given resolution. */
-static void render_core(char *grid, int cols, int rows) {
+/* Fill a cols*rows character grid with the current shape. */
+static void render_grid(char *grid, int cols, int rows) {
     double aspect = CHAR_ASPECT * (double)cols / (double)rows;
     RenderCtx ctx;
 
     pool_ensure();
     update_transform();
     update_camera();
-    if (g_mesh) {
-        /* The fit scale depends only on the mesh, the aspect and the tilt (not
-         * on the spin), so recompute it only when one of those changes instead
-         * of every frame. This keeps the model a constant size while it turns. */
-        if (g_mesh != g_scale_mesh || aspect != g_scale_aspect || g_tilt != g_scale_tilt) {
-            g_scale_value = mesh_scale(g_mesh, aspect);
+    {
+        int kind = g_mesh ? -1 : g_analytic;
+        if (g_mesh != g_scale_mesh || kind != g_scale_kind ||
+            aspect != g_scale_aspect || g_tilt != g_scale_tilt) {
+            setup_fit_cloud();
+            g_scale_value = compute_fit_scale(aspect);
             g_scale_mesh = g_mesh;
+            g_scale_kind = kind;
             g_scale_aspect = aspect;
             g_scale_tilt = g_tilt;
         }
-        g_mesh_scale = g_scale_value;
-    } else {
-        g_mesh_scale = 1.0;
-        g_scale_mesh = NULL;
+        if (g_mesh) g_mesh_scale = g_scale_value;
+        else        g_analytic_scale = g_scale_value;
     }
     g_super = (g_mesh && g_mesh->ntri > SUPER_TRIS) ? 0 : 1;
 
@@ -1084,38 +1125,6 @@ static void render_core(char *grid, int cols, int rows) {
     pool_run(render_rows, &ctx, rows);
     ctx.pass = 2;
     pool_run(render_rows, &ctx, rows);
-}
-
-/* Render with the current font size. For a block size > 1 the shape is drawn at
- * a coarser virtual resolution and every virtual cell is expanded to a block of
- * real cells, so the characters look bigger while the model keeps its size. */
-static void render_grid(char *grid, int cols, int rows) {
-    int block = font_block();
-    int vc, vr, r, c;
-    static char *vg = NULL;
-    static int   vg_cap = 0;
-
-    if (block <= 1 || cols < block || rows < block) {
-        render_core(grid, cols, rows);
-        return;
-    }
-    vc = cols / block;
-    vr = rows / block;
-    if (vc < 1) vc = 1;
-    if (vr < 1) vr = 1;
-    if (vc * vr > vg_cap) {
-        char *p = (char *)realloc(vg, (size_t)vc * vr);
-        if (!p) { render_core(grid, cols, rows); return; }
-        vg = p; vg_cap = vc * vr;
-    }
-    render_core(vg, vc, vr);
-    for (r = 0; r < rows; ++r) {
-        int srow = (int)((long)r * vr / rows) * vc;
-        for (c = 0; c < cols; ++c) {
-            int scol = (int)((long)c * vc / cols);
-            grid[(size_t)r * cols + c] = vg[srow + scol];
-        }
-    }
 }
 
 /* Overlay the status line in the top-left corner. */
@@ -1147,11 +1156,10 @@ static void draw_hud(char *grid, int cols, int rows) {
     }
 
     g_fps_len = 0;
-    {                                     /* bottom-left status: font + FPS */
-        char fb[48];
+    if (g_show_fps) {                     /* FPS display, bottom-left */
+        char fb[32];
         int len;
-        if (g_show_fps) _snprintf(fb, sizeof(fb), "font:%d  FPS:%d", g_font_level, (int)(g_fps + 0.5));
-        else            _snprintf(fb, sizeof(fb), "font:%d", g_font_level);
+        _snprintf(fb, sizeof(fb), "FPS: %d", (int)(g_fps + 0.5));
         fb[sizeof(fb) - 1] = '\0';
         len = (int)strlen(fb);
         if (len > cols) len = cols;
@@ -1846,8 +1854,7 @@ static void print_help(void) {
         "      --menu           With --snapshot: draw the model list (preview)\n"
         "      --lod <level>    With --snapshot: apply an LOD level (0..%d)\n"
         "      --bench <frames> Benchmark offscreen rendering and exit\n"
-        "      --fps <n>        Frame-rate cap for interactive mode (default 60)\n"
-        "      --font <n>       Font size 1..5 (3 = native; 4/5 = 2x2/3x3 blocks)\n\n"
+        "      --fps <n>        Frame-rate cap for interactive mode (default 60)\n\n"
         "Controls (interactive):\n"
         "  ESC                  Quit\n"
         "  +                    Increase spin by %d deg/s (max %d deg/s)\n"
@@ -1862,11 +1869,6 @@ static void print_help(void) {
         "  LEFT / RIGHT         In the list: move the mesh-colour slider\n"
         "                       (256-colour scale, applied live)\n"
         "  SHIFT+LEFT / RIGHT   Move the light-source colour slider\n"
-        "  1 .. 5               Font size: in the classic console the real font is\n"
-        "                       resized; where that is not allowed, 4/5 draw each\n"
-        "                       character as a 2x2 / 3x3 block (same model size)\n"
-        "                       and 1/2 stay native (in Windows Terminal use\n"
-        "                       Ctrl+Minus / Ctrl+Plus to change the font)\n"
         "  PAGE UP / PAGE DOWN  Weaker / stronger LOD for meshes that were\n"
         "                       reduced from too many triangles\n"
         "  POS1 (HOME)          Toggle the FPS display (bottom-left)\n"
@@ -1919,14 +1921,6 @@ static int parse_args(int argc, char **argv) {
             g_target_fps = atoi(argv[++i]);
             if (g_target_fps < 0) g_target_fps = 0;
             if (g_target_fps > 240) g_target_fps = 240;
-        } else if (_stricmp(a, "--font") == 0) {
-            if (i + 1 >= argc) {
-                fprintf(stderr, "error: --font requires a value\n");
-                return 0;
-            }
-            g_font_level = atoi(argv[++i]);
-            if (g_font_level < 1) g_font_level = 1;
-            if (g_font_level > 5) g_font_level = 5;
         } else if (_stricmp(a, "-s") == 0 || _stricmp(a, "--shape") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "error: %s requires a value\n", a);
@@ -2004,65 +1998,6 @@ static void precise_sleep(double sec) {
         }
     }
     Sleep((DWORD)(sec * 1000.0 + 0.5));
-}
-
-/* ---- console font size (keys 1..5). Level 3 is the current size. ---------
- * SetCurrentConsoleFontEx is the only way to really resize the glyphs; it works
- * in the classic console but not under Windows Terminal/ConPTY. We probe it and,
- * if it is unavailable, fall back to block scaling (see font_block()). */
-static void font_query(HANDLE h) {
-    CONSOLE_FONT_INFO cfi;
-    COORD sz;
-
-    memset(&g_font_base, 0, sizeof(g_font_base));
-    g_font_base.cbSize = sizeof(g_font_base);
-    if (GetCurrentConsoleFontEx(h, FALSE, &g_font_base) && g_font_base.dwFontSize.Y > 0) {
-        g_font_api = 1;
-        return;
-    }
-    /* Many consoles report a zero size for TrueType fonts; ask the older API. */
-    if (GetCurrentConsoleFont(h, FALSE, &cfi)) {
-        sz = GetConsoleFontSize(h, cfi.nFont);
-        if (sz.Y > 0) {
-            if (g_font_base.FaceName[0] == L'\0') wcscpy(g_font_base.FaceName, L"Consolas");
-            g_font_base.dwFontSize = sz;
-            if (g_font_base.FontWeight == 0) g_font_base.FontWeight = 400;
-            g_font_api = 1;
-            return;
-        }
-    }
-    /* Last resort: a sensible default face/size; SetCurrentConsoleFontEx will
-     * decide whether it is accepted. */
-    g_font_base.cbSize = sizeof(g_font_base);
-    wcscpy(g_font_base.FaceName, L"Consolas");
-    g_font_base.dwFontSize.X = 0;
-    g_font_base.dwFontSize.Y = 16;
-    g_font_base.FontWeight = 400;
-    g_font_api = 1;
-}
-
-static void font_apply(HANDLE h, int level) {
-    static const double f[5] = { 0.60, 0.80, 1.00, 1.30, 1.65 };
-    CONSOLE_FONT_INFOEX cfx, chk;
-    int h0;
-    if (level < 1) level = 1;
-    if (level > 5) level = 5;
-    g_font_level = level;
-    if (g_font_api == 0) return;                 /* known unavailable */
-    h0 = g_font_base.dwFontSize.Y;
-    if (h0 <= 0) h0 = 16;
-    cfx = g_font_base;
-    cfx.cbSize = sizeof(cfx);
-    if (cfx.dwFontSize.X > 0) cfx.dwFontSize.X = (SHORT)(cfx.dwFontSize.X * f[level - 1] + 0.5);
-    cfx.dwFontSize.Y = (SHORT)(h0 * f[level - 1] + 0.5);
-    if (cfx.dwFontSize.Y < 6)   cfx.dwFontSize.Y = 6;
-    if (cfx.dwFontSize.Y > 128) cfx.dwFontSize.Y = 128;
-    if (!SetCurrentConsoleFontEx(h, FALSE, &cfx)) { g_font_api = 0; return; }
-    chk.cbSize = sizeof(chk);
-    if (GetCurrentConsoleFontEx(h, FALSE, &chk) && chk.dwFontSize.Y == cfx.dwFontSize.Y)
-        g_font_api = 1;                          /* it really changed */
-    else
-        g_font_api = 0;                          /* ignored -> use blocks */
 }
 
 /* Offscreen render benchmark: renders `frames` frames over one full turn and
@@ -2191,8 +2126,6 @@ int main(int argc, char **argv) {
                           & ~((DWORD)ENABLE_QUICK_EDIT_MODE));
     SetConsoleTitleA(APP_NAME " " APP_VERSION " - press ESC to quit");
     SetConsoleCtrlHandler(on_ctrl, TRUE);
-    font_query(h_out);
-    if (g_font_level != 3) font_apply(h_out, g_font_level);
     write_all(h_out, is_console, "\x1b[?1049h\x1b[?25l", -1);
 
     angle_deg = g_start_angle;
@@ -2234,7 +2167,6 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_PRIOR) apply_lod(-1);
                                 else if (vk == VK_NEXT)  apply_lod(1);
                                 else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
-                                else if ((ch >= '1' && ch <= '5') || (vk >= '1' && vk <= '5')) { int lvl = (ch >= '1' && ch <= '5') ? (ch - '0') : (vk - '0'); int b; font_apply(h_out, lvl); g_scale_mesh = NULL; b = font_block(); if (g_font_api == 1) msg_setf("font size %d", lvl); else if (b > 1) msg_setf("font size %d (%s)", lvl, b == 2 ? "2x2 blocks" : "3x3 blocks"); else msg_setf("font size %d (native) - use Ctrl+Minus in Windows Terminal for finer", lvl); }
                                 else if (vk == VK_LEFT)  { if (cks & SHIFT_PRESSED) color_step(&g_light_sel, &g_light_color, -1); else color_step(&g_color_sel, &g_fg_color, -1); }
                                 else if (vk == VK_RIGHT) { if (cks & SHIFT_PRESSED) color_step(&g_light_sel, &g_light_color,  1); else color_step(&g_color_sel, &g_fg_color,  1); }
                                 else if (ch == 'q' || ch == 'Q') g_running = 0;
@@ -2260,7 +2192,6 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_PRIOR) apply_lod(-1);
                                 else if (vk == VK_NEXT)  apply_lod(1);
                                 else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
-                                else if ((ch >= '1' && ch <= '5') || (vk >= '1' && vk <= '5')) { int lvl = (ch >= '1' && ch <= '5') ? (ch - '0') : (vk - '0'); int b; font_apply(h_out, lvl); g_scale_mesh = NULL; b = font_block(); if (g_font_api == 1) msg_setf("font size %d", lvl); else if (b > 1) msg_setf("font size %d (%s)", lvl, b == 2 ? "2x2 blocks" : "3x3 blocks"); else msg_setf("font size %d (native) - use Ctrl+Minus in Windows Terminal for finer", lvl); }
                                 else if (ch == 'r' || ch == 'R') models_poll(1);
                             }
                         } else if (r->EventType == MOUSE_EVENT && g_menu_open) {

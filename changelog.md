@@ -4,6 +4,21 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.10] - 2026-10-09
+
+### Removed
+- The built-in font-size feature (keys `1`..`5`, `--font`, the console-font API
+  and the block-scaling fallback). Character size is now handled by the terminal
+  itself (e.g. `Ctrl`+`-` / `Ctrl`+`+` in Windows Terminal); the model re-fits
+  automatically.
+
+### Changed
+- Models are now fitted to the view using their **silhouette** (sampled
+  surface points) instead of the loose bounding box, so they fill the screen
+  properly: the smallest margin is now at most ~10% of the terminal height or
+  width for every shape (previously up to ~18%). Analytic shapes are fitted the
+  same way. The scale stays rotation-invariant (no resizing while turning).
+
 ## [0.2.9] - 2026-10-09
 
 ### Changed

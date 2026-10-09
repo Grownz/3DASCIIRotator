@@ -45,14 +45,10 @@ Prebuilt Windows x64 binaries are on the
   The characters are tinted from the mesh colour (shadow) to the light colour
   (lit). Black and the five darkest greys are skipped so the art stays readable;
   the choice applies immediately.
-- **Font size.** Press `1`..`5` to change the character size; the current level
-  is shown bottom-left as `font:N`. In the classic console the real font is
-  resized (`1`/`2` smaller, `4`/`5` larger) and the model is re-fitted so it
-  keeps its size. Where the terminal does not allow font changes (Windows
-  Terminal ignores them), levels `4`/`5` instead draw every character as a
-  2x2 / 3x3 block (chunkier art, same model size) and `1`/`2` match `3` — there,
-  use **`Ctrl`+`-` / `Ctrl`+`+`** (or `Ctrl`+scroll) to make the font smaller /
-  larger; the model re-fits and keeps its size.
+- **Always framed.** The model is auto-fitted to the view so its silhouette
+  comes within about 5% of the terminal edge (at least one margin is always
+  under 10%), and the scale is rotation-invariant, so it keeps the same size
+  while it turns.
 - **FPS readout.** Press `Pos1` / `Home` to toggle a frames-per-second display
   in the bottom-left corner.
 - **Always spinning.** The solid rotates around the vertical (z) axis at
@@ -119,7 +115,6 @@ build\ascii3D.exe -s cube
 | `--lod <level>` | With `--snapshot`: render at a given LOD level (`0`..`6`). |
 | `--bench <frames>` | Benchmark offscreen rendering (`ms/frame`, `fps`) and exit. |
 | `--fps <n>` | Interactive frame-rate cap (`1`..`240`, default `60`; `0` = uncapped). |
-| `--font <n>` | Character size `1`..`5` (`3` = native, `4`/`5` = 2x2/3x3 blocks). |
 
 ### Examples
 
@@ -155,7 +150,6 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 | `Page Up` / `Page Down` | Weaker / stronger LOD for meshes that were reduced (too many triangles). |
 | `Left` / `Right` | In the open model list: move the mesh-colour slider (applied live). |
 | `Shift`+`Left` / `Right` | In the open model list: move the light-source colour slider. |
-| `1` .. `5` | Character size: `3` = native, `4`/`5` = 2x2/3x3 blocks (model keeps its size). |
 | `Pos1` / `Home` | Toggle the FPS display in the bottom-left corner. |
 | `R` | Rescan the `models/` folder now. |
 | `q` | Quit (convenience alias for `ESC`). |
@@ -307,7 +301,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.9**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.10**. See [changelog.md](changelog.md) for details.
 
 ## Roadmap
 
