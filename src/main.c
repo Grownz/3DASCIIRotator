@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.5
+ * 3D ASCII Rotator - version 0.2.6
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -45,7 +45,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.5"
+#define APP_VERSION "0.2.6"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -102,6 +102,9 @@ static int          g_menu_start = 0;              /* --menu (snapshot preview) 
 static int          g_lod_arg = -1;                /* --lod level (snapshot) */
 static int          g_bench = 0;                   /* --bench <frames>      */
 static int          g_target_fps = 60;             /* --fps (0 = unlimited) */
+static int          g_font_level = 3;              /* console font size 1..5 */
+static CONSOLE_FONT_INFOEX g_font_base;
+static int          g_font_base_valid = 0;
 
 /* --- status message (auto-hides), FPS HUD, shape colour, menu slider ----- */
 static int    g_show_fps = 0;
@@ -109,6 +112,10 @@ static double g_fps = 0.0;
 static double g_msg_time = 0.0;                    /* seconds left to show msg */
 static int    g_fg_color = 7;                      /* ANSI colour of the shape */
 static int    g_color_sel = 0;                     /* index into COLORS[]      */
+static int    g_light_color = 15;                  /* ANSI colour of the light */
+static int    g_light_sel = 0;                     /* index into COLORS[]      */
+static unsigned char g_grad[RAMP_N];              /* ramp level -> palette idx */
+static signed char   g_ramp_rev[256];             /* ramp char  -> level       */
 static short *g_cc = NULL;                         /* per-cell colour override */
 static int    g_cc_cap = 0;
 static double *g_lum = NULL;                       /* per-cell luminance buffer */
@@ -127,6 +134,12 @@ static int    g_hud_len = 0, g_msg_len = 0, g_fps_len = 0, g_menu_x0 = -1, g_row
 static int COLORS[300];
 static int COLOR_N = 0;
 
+static int colors_index(int pal) {
+    int i;
+    for (i = 0; i < COLOR_N; ++i) if (COLORS[i] == pal) return i;
+    return 0;
+}
+
 static void colors_init(void) {
     int i;
     COLOR_N = 0;
@@ -135,6 +148,69 @@ static void colors_init(void) {
         if (i >= 232 && i <= 236) continue;   /* five darkest greys */
         COLORS[COLOR_N++] = i;
     }
+    g_color_sel = colors_index(g_fg_color);
+    g_light_sel = colors_index(g_light_color);
+}
+
+/* ---- 256-colour palette helpers (blend mesh colour -> light colour) ------ */
+static void palette_rgb(int idx, int *r, int *g, int *b) {
+    static const unsigned char sys[16][3] = {
+        {0,0,0},{128,0,0},{0,128,0},{128,128,0},{0,0,128},{128,0,128},{0,128,128},{192,192,192},
+        {128,128,128},{255,0,0},{0,255,0},{255,255,0},{0,0,255},{255,0,255},{0,255,255},{255,255,255}
+    };
+    static const int lv[6] = { 0, 95, 135, 175, 215, 255 };
+    if (idx < 0) idx = 0;
+    if (idx > 255) idx = 255;
+    if (idx < 16) { *r = sys[idx][0]; *g = sys[idx][1]; *b = sys[idx][2]; }
+    else if (idx < 232) {
+        int c = idx - 16;
+        *r = lv[(c / 36) % 6]; *g = lv[(c / 6) % 6]; *b = lv[c % 6];
+    } else {
+        int v = 8 + (idx - 232) * 10;
+        *r = *g = *b = v;
+    }
+}
+
+static int nearest_color(int r, int g, int b) {
+    int i, best = COLORS[0];
+    long bd = 0x7fffffffL;
+    for (i = 0; i < COLOR_N; ++i) {
+        int pr, pg, pb;
+        long d;
+        palette_rgb(COLORS[i], &pr, &pg, &pb);
+        d = (long)(pr - r) * (pr - r) + (long)(pg - g) * (pg - g) + (long)(pb - b) * (pb - b);
+        if (d < bd) { bd = d; best = COLORS[i]; }
+    }
+    return best;
+}
+
+/* Rebuild the per-ramp-level colour table for the current mesh/light colours. */
+static void grad_build(void) {
+    int mr, mg, mb, lr, lg, lb, i;
+    palette_rgb(g_fg_color, &mr, &mg, &mb);
+    palette_rgb(g_light_color, &lr, &lg, &lb);
+    for (i = 0; i < RAMP_N; ++i) {
+        double t = (double)i / (RAMP_N - 1);
+        int r = (int)(mr + (lr - mr) * t + 0.5);
+        int g = (int)(mg + (lg - mg) * t + 0.5);
+        int b = (int)(mb + (lb - mb) * t + 0.5);
+        g_grad[i] = (unsigned char)nearest_color(r, g, b);
+    }
+}
+
+static void ramp_rev_init(void) {
+    int i;
+    memset(g_ramp_rev, -1, sizeof(g_ramp_rev));
+    for (i = 0; i < RAMP_N; ++i) g_ramp_rev[(unsigned char)RAMP[i]] = (signed char)i;
+}
+
+/* Move one of the two colour sliders and rebuild the gradient. */
+static void color_step(int *sel, int *color, int delta) {
+    *sel += delta;
+    if (*sel < 0) *sel = 0;
+    if (*sel >= COLOR_N) *sel = COLOR_N - 1;
+    *color = COLORS[*sel];
+    grad_build();
 }
 
 static void msg_setf(const char *fmt, ...) {
@@ -458,37 +534,48 @@ static void mesh_destroy(MeshDef *m) {
     free(m);
 }
 
-/* Does the model fit the view at scale s? (perspective, current orientation) */
-static int mesh_fits(const MeshDef *m, double s, double hw, double hh) {
+/* Does the mesh fit at scale s and spin angle (ca, sa)? Uses the object-space
+ * bounding box; the caller samples several spin angles so the chosen scale is
+ * constant while the model rotates. */
+static int mesh_fits_ang(const MeshDef *m, double s, double hw, double hh, double ca, double sa) {
     double e = m->elev * (PI / 180.0), ce = cos(e), se = sin(e);
     double D = CAM_DIST;
     int i;
     for (i = 0; i < 8; ++i) {
-        v3 c = v3_make((i & 1) ? m->bmax[0] : m->bmin[0],
-                       (i & 2) ? m->bmax[1] : m->bmin[1],
-                       (i & 4) ? m->bmax[2] : m->bmin[2]);
-        v3 W = from_object(c);
-        double den = D + s * (W.y * ce - W.z * se);
+        double px = (i & 1) ? m->bmax[0] : m->bmin[0];
+        double py = (i & 2) ? m->bmax[1] : m->bmin[1];
+        double pz = (i & 4) ? m->bmax[2] : m->bmin[2];
+        double qx = px * ca - py * sa, qy = px * sa + py * ca, qz = pz;
+        double wx = qx, wy = qy * g_ct + qz * g_st, wz = -qy * g_st + qz * g_ct;
+        double den = D + s * (wy * ce - wz * se);
         double hx, vz;
         if (den <= 0.1) return 0;
-        hx = D * s * W.x / den;
-        vz = D * s * (W.y * se + W.z * ce) / den;
+        hx = D * s * wx / den;
+        vz = D * s * (wy * se + wz * ce) / den;
         if (fabs(hx) > 0.94 * hw) return 0;
         if (fabs(vz) > 0.94 * hh) return 0;
     }
     return 1;
 }
 
-/* Largest scale that fits the (perspective) view at the current orientation. */
+/* Largest scale that fits for *every* spin angle, so the model keeps the same
+ * size while it turns. Depends on the tilt, which update_transform() has set. */
 static double mesh_scale(const MeshDef *m, double aspect) {
     double hw = VIEW_HALF * aspect, hh = VIEW_HALF;
-    double lo = 0.0, hi = 8.0;
-    int i;
-    for (i = 0; i < 40; ++i) {
-        double mid = (lo + hi) * 0.5;
-        if (mesh_fits(m, mid, hw, hh)) lo = mid; else hi = mid;
+    double best = 8.0;
+    int k;
+    for (k = 0; k < 48; ++k) {
+        double a = (double)k * (2.0 * PI / 48.0);
+        double ca = cos(a), sa = sin(a);
+        double lo = 0.0, hi = 8.0;
+        int i;
+        for (i = 0; i < 28; ++i) {
+            double mid = (lo + hi) * 0.5;
+            if (mesh_fits_ang(m, mid, hw, hh, ca, sa)) lo = mid; else hi = mid;
+        }
+        if (lo < best) best = lo;
     }
-    return lo * (m->zoom > 0.01 ? m->zoom : 1.0);
+    return best * (m->zoom > 0.01 ? m->zoom : 1.0);
 }
 
 static MeshDef g_mesh_stego = { STEGO_VERT, STEGO_TRI, STEGO_NVERT, STEGO_NTRI,
@@ -525,6 +612,8 @@ static int        g_item_count = 0, g_item_cap = 0, g_item_index = 0;
 
 static MeshDef *g_mesh = NULL;        /* mesh of the current item, or NULL */
 static double   g_mesh_scale = 1.0;   /* current fit-to-view scale         */
+static MeshDef *g_scale_mesh = NULL;  /* cache key for the fit scale       */
+static double   g_scale_aspect = -1.0, g_scale_tilt = 1e9, g_scale_value = 1.0;
 static int      g_super = 1;          /* 1 = 2x2 supersample, 0 = single   */
 static int      g_analytic = SH_CUBE; /* analytic kind when g_mesh == NULL */
 static char     g_shape_name_buf[64] = "cube";
@@ -943,7 +1032,21 @@ static void render_grid(char *grid, int cols, int rows) {
     pool_ensure();
     update_transform();
     update_camera();
-    g_mesh_scale = g_mesh ? mesh_scale(g_mesh, aspect) : 1.0;
+    if (g_mesh) {
+        /* The fit scale depends only on the mesh, the aspect and the tilt (not
+         * on the spin), so recompute it only when one of those changes instead
+         * of every frame. This keeps the model a constant size while it turns. */
+        if (g_mesh != g_scale_mesh || aspect != g_scale_aspect || g_tilt != g_scale_tilt) {
+            g_scale_value = mesh_scale(g_mesh, aspect);
+            g_scale_mesh = g_mesh;
+            g_scale_aspect = aspect;
+            g_scale_tilt = g_tilt;
+        }
+        g_mesh_scale = g_scale_value;
+    } else {
+        g_mesh_scale = 1.0;
+        g_scale_mesh = NULL;
+    }
     g_super = (g_mesh && g_mesh->ntri > SUPER_TRIS) ? 0 : 1;
 
     ctx.grid = grid; ctx.cols = cols; ctx.rows = rows; ctx.aspect = aspect;
@@ -1015,6 +1118,48 @@ static void draw_hud(char *grid, int cols, int rows) {
     g_rows = rows;
 }
 
+/* Small ASCII logos for the two colour sliders. */
+static const char *const LOGO_MESH[3]  = { " ,---. ", " |#%#| ", " `---' " };
+static const char *const LOGO_LIGHT[3] = { " \\ | / ", " -(*)- ", " / | \\ " };
+
+/* Draw one labelled colour slider (logo on the left, gradient + caret). */
+static void draw_color_slider(char *grid, int cols, int rows, int x0, int r0,
+                              const char *const logo[3], const char *label, int sel) {
+    int logo_w = 0, sx, sw, i, c;
+    if (logo) {
+        int k;
+        for (k = 0; k < 3; ++k) { int l = (int)strlen(logo[k]); if (l > logo_w) logo_w = l; }
+    }
+    sx = x0 + 1;
+    if (logo_w > 0 && (cols - sx - 2) >= logo_w + 8) {
+        int k;
+        for (k = 0; k < 3 && r0 + k < rows; ++k) {
+            const char *t = logo[k];
+            c = sx;
+            while (*t && c < cols - 1) grid[(size_t)(r0 + k) * cols + c++] = *t++;
+        }
+        sx += logo_w + 1;
+    }
+    sw = cols - sx - 1;
+    if (sw < 2) return;
+    c = sx;
+    while (*label && c < cols - 1) grid[(size_t)r0 * cols + c++] = *label++;
+    for (i = 0; i < sw; ++i) {
+        int p = (sw > 1) ? (int)((double)i * (COLOR_N - 1) / (sw - 1)) : 0;
+        size_t idx = (size_t)(r0 + 1) * cols + (sx + i);
+        if (r0 + 1 < rows) { grid[idx] = '='; if (g_cc) g_cc[idx] = (short)COLORS[p]; }
+    }
+    if (r0 + 2 < rows) {
+        int pos = (sw > 1) ? (int)((double)sel * (sw - 1) / (COLOR_N - 1) + 0.5) : 0;
+        size_t idx;
+        if (pos < 0) pos = 0;
+        if (pos >= sw) pos = sw - 1;
+        idx = (size_t)(r0 + 2) * cols + (sx + pos);
+        grid[idx] = '^';
+        if (g_cc) g_cc[idx] = (short)COLORS[sel];
+    }
+}
+
 /* Right-hand model list (Tab): about a quarter of the width, top to bottom. */
 static void draw_menu(char *grid, int cols, int rows) {
     int pw = cols / 4;
@@ -1026,10 +1171,10 @@ static void draw_menu(char *grid, int cols, int rows) {
     x0 = cols - pw;
     g_menu_x0 = x0;
 
-    /* the bottom third of the panel holds the colour slider */
+    /* the bottom third of the panel holds the two colour sliders */
     b0 = rows * 2 / 3;
     if (b0 < 5) b0 = 5;
-    if (b0 > rows - 3) b0 = rows - 3;
+    if (b0 > rows - 7) b0 = rows - 7;
     if (b0 < 1) b0 = 1;
     listrows = b0 - 1;
     if (listrows < 1) return;
@@ -1068,34 +1213,25 @@ static void draw_menu(char *grid, int cols, int rows) {
     if (g_menu_scroll + listrows < g_item_count)
         grid[(size_t)(b0 - 1) * cols + (cols - 1)] = 'v';
 
-    /* --- colour slider (bottom third): pick the shape colour live --------- */
-    sw = cols - x0 - 2;                        /* slider cells: x0+1 .. cols-2 */
-    if (sw >= 2) {
+    /* --- two colour sliders (bottom third): mesh + light source ----------- */
+    {
         char lbl[48];
-        const char *t;
-        _snprintf(lbl, sizeof(lbl), " colour %d/%d  #%d ", g_color_sel + 1, COLOR_N,
-                  COLORS[g_color_sel]);
-        lbl[sizeof(lbl) - 1] = '\0';
-        t = lbl;
-        c = x0 + 1;
-        while (*t && c < cols - 1) grid[(size_t)b0 * cols + c++] = *t++;
-
-        for (i = 0; i < sw; ++i) {             /* gradient bar */
-            int p = (sw > 1) ? (int)((double)i * (COLOR_N - 1) / (sw - 1)) : 0;
-            size_t idx = (size_t)(b0 + 1) * cols + (x0 + 1 + i);
-            grid[idx] = '=';
-            if (g_cc) g_cc[idx] = (short)COLORS[p];
-        }
-        if (b0 + 2 < rows) {                   /* caret under the current value */
-            int pos = (sw > 1) ? (int)((double)g_color_sel * (sw - 1) / (COLOR_N - 1) + 0.5) : 0;
-            size_t idx;
-            if (pos < 0) pos = 0;
-            if (pos >= sw) pos = sw - 1;
-            idx = (size_t)(b0 + 2) * cols + (x0 + 1 + pos);
-            grid[idx] = '^';
-            if (g_cc) g_cc[idx] = (short)COLORS[g_color_sel];
+        int r0 = b0;
+        if (r0 + 7 <= rows) {
+            _snprintf(lbl, sizeof(lbl), " mesh %d/%d", g_color_sel + 1, COLOR_N);
+            lbl[sizeof(lbl) - 1] = '\0';
+            draw_color_slider(grid, cols, rows, x0, r0, LOGO_MESH, lbl, g_color_sel);
+            r0 += 4;
+            _snprintf(lbl, sizeof(lbl), " light %d/%d", g_light_sel + 1, COLOR_N);
+            lbl[sizeof(lbl) - 1] = '\0';
+            draw_color_slider(grid, cols, rows, x0, r0, LOGO_LIGHT, lbl, g_light_sel);
+        } else {                               /* too little room: mesh only */
+            _snprintf(lbl, sizeof(lbl), " mesh %d/%d", g_color_sel + 1, COLOR_N);
+            lbl[sizeof(lbl) - 1] = '\0';
+            draw_color_slider(grid, cols, rows, x0, b0, NULL, lbl, g_color_sel);
         }
     }
+    (void)sw;
 }
 
 /* --------------------------------------------------------------- particles
@@ -1679,8 +1815,11 @@ static void print_help(void) {
         "  TAB                  Toggle the model list on the right; then pick\n"
         "                       with Up/Down (tilt pauses) and load with\n"
         "                       SPACE/ENTER; scroll with the mouse wheel\n"
-        "  LEFT / RIGHT         In the list: move the shape-colour slider\n"
+        "  LEFT / RIGHT         In the list: move the mesh-colour slider\n"
         "                       (256-colour scale, applied live)\n"
+        "  SHIFT+LEFT / RIGHT   Move the light-source colour slider\n"
+        "  1 .. 5               Console font size (3 = current); the model keeps\n"
+        "                       the same size\n"
         "  PAGE UP / PAGE DOWN  Weaker / stronger LOD for meshes that were\n"
         "                       reduced from too many triangles\n"
         "  POS1 (HOME)          Toggle the FPS display (bottom-left)\n"
@@ -1812,6 +1951,35 @@ static void precise_sleep(double sec) {
     Sleep((DWORD)(sec * 1000.0 + 0.5));
 }
 
+/* ---- console font size (keys 1..5): level 3 is the current size ---------- */
+static void font_query(HANDLE h) {
+    g_font_base.cbSize = sizeof(g_font_base);
+    g_font_base_valid = GetCurrentConsoleFontEx(h, FALSE, &g_font_base) ? 1 : 0;
+}
+
+static void font_apply(HANDLE h, int level) {
+    static const double f[5] = { 0.60, 0.80, 1.00, 1.30, 1.65 };
+    CONSOLE_FONT_INFOEX cfx;
+    int h0;
+    if (level < 1) level = 1;
+    if (level > 5) level = 5;
+    g_font_level = level;
+    if (!g_font_base_valid) return;
+    h0 = g_font_base.dwFontSize.Y;
+    if (h0 <= 0) return;
+    cfx = g_font_base;
+    cfx.cbSize = sizeof(cfx);
+    cfx.dwFontSize.X = 0;                          /* 0 = let the console pick */
+    cfx.dwFontSize.Y = (SHORT)(h0 * f[level - 1] + 0.5);
+    if (cfx.dwFontSize.Y < 6)   cfx.dwFontSize.Y = 6;
+    if (cfx.dwFontSize.Y > 128) cfx.dwFontSize.Y = 128;
+    if (!SetCurrentConsoleFontEx(h, FALSE, &cfx))
+        msg_setf("font size %d not supported by this terminal", level);
+    else
+        msg_setf("font size %d", level);
+    g_scale_mesh = NULL;                           /* force a re-fit */
+}
+
 /* Offscreen render benchmark: renders `frames` frames over one full turn and
  * reports the average time per frame (no console required). */
 static int run_bench(int frames) {
@@ -1855,6 +2023,8 @@ int main(int argc, char **argv) {
 
     if (!parse_args(argc, argv)) return 1;
     colors_init();
+    ramp_rev_init();
+    grad_build();
 
     build_registry();
     models_init();
@@ -1936,6 +2106,7 @@ int main(int argc, char **argv) {
                           & ~((DWORD)ENABLE_QUICK_EDIT_MODE));
     SetConsoleTitleA(APP_NAME " " APP_VERSION " - press ESC to quit");
     SetConsoleCtrlHandler(on_ctrl, TRUE);
+    font_query(h_out);
     write_all(h_out, is_console, "\x1b[?1049h\x1b[?25l", -1);
 
     angle_deg = g_start_angle;
@@ -1965,6 +2136,7 @@ int main(int argc, char **argv) {
                         if (r->EventType == KEY_EVENT && r->Event.KeyEvent.bKeyDown) {
                             WORD vk = r->Event.KeyEvent.wVirtualKeyCode;
                             char ch = r->Event.KeyEvent.uChar.AsciiChar;
+                            DWORD cks = r->Event.KeyEvent.dwControlKeyState;
                             if (g_menu_open) {
                                 if (vk == VK_TAB) g_menu_open = 0;
                                 else if (vk == VK_ESCAPE) g_running = 0;
@@ -1976,8 +2148,9 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_PRIOR) apply_lod(-1);
                                 else if (vk == VK_NEXT)  apply_lod(1);
                                 else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
-                                else if (vk == VK_LEFT)  { if (g_color_sel > 0) { --g_color_sel; g_fg_color = COLORS[g_color_sel]; } }
-                                else if (vk == VK_RIGHT) { if (g_color_sel < COLOR_N - 1) { ++g_color_sel; g_fg_color = COLORS[g_color_sel]; } }
+                                else if (ch >= '1' && ch <= '5') font_apply(h_out, ch - '0');
+                                else if (vk == VK_LEFT)  { if (cks & SHIFT_PRESSED) color_step(&g_light_sel, &g_light_color, -1); else color_step(&g_color_sel, &g_fg_color, -1); }
+                                else if (vk == VK_RIGHT) { if (cks & SHIFT_PRESSED) color_step(&g_light_sel, &g_light_color,  1); else color_step(&g_color_sel, &g_fg_color,  1); }
                                 else if (ch == 'q' || ch == 'Q') g_running = 0;
                                 else if (ch == 'r' || ch == 'R') models_poll(1);
                             } else {
@@ -2001,6 +2174,7 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_PRIOR) apply_lod(-1);
                                 else if (vk == VK_NEXT)  apply_lod(1);
                                 else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
+                                else if (ch >= '1' && ch <= '5') font_apply(h_out, ch - '0');
                                 else if (ch == 'r' || ch == 'R') models_poll(1);
                             }
                         } else if (r->EventType == MOUSE_EVENT && g_menu_open) {
@@ -2029,6 +2203,7 @@ int main(int argc, char **argv) {
                 out = (char *)malloc((size_t)cols * rows * 6 + (size_t)rows * 4 + 256);
                 if (!out) break;
                 cc_ensure(cols * rows);
+                g_scale_mesh = NULL;   /* console changed: re-fit the model */
                 g_shattered = 0; /* particle field is tied to the old size */
                 write_all(h_out, is_console, "\x1b[2J", -1);
             }
@@ -2086,7 +2261,10 @@ int main(int argc, char **argv) {
                     int want;
                     if (g_cc && g_cc[idx] >= 0) want = g_cc[idx];
                     else if (is_ui_cell(r, c))  want = -1;
-                    else                        want = g_fg_color;
+                    else {
+                        int ri = g_ramp_rev[(unsigned char)grid[idx]];
+                        want = (ri >= 0) ? g_grad[ri] : g_fg_color;
+                    }
                     if (want != cur) {
                         if (want < 0) o += sprintf(o, "\x1b[39m");
                         else          o += sprintf(o, "\x1b[38;5;%dm", want);

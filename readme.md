@@ -39,10 +39,15 @@ Prebuilt Windows x64 binaries are on the
 - **Model list.** Press `Tab` for a scrollable list of every available
   shape/model on the right; pick with the arrow keys or the mouse wheel and
   load with `SPACE`/`ENTER`.
-- **Shape colour.** While the list is open, move the slider in its bottom third
-  with `Left` / `Right` to recolour the shape's characters from a 256-colour
-  scale (black and the five darkest greys are skipped so the art stays
-  readable); the choice applies immediately.
+- **Colours.** While the list is open, its bottom third shows two 256-colour
+  sliders, each with an ASCII logo: one for the **mesh colour** (`Left` /
+  `Right`) and one for the **light-source colour** (`Shift`+`Left` / `Right`).
+  The characters are tinted from the mesh colour (shadow) to the light colour
+  (lit). Black and the five darkest greys are skipped so the art stays readable;
+  the choice applies immediately.
+- **Font size.** Press `1`..`5` to change the console font size (`3` = the
+  current size). The number of rows changes, but the model is re-fitted so it
+  stays the same size on screen.
 - **FPS readout.** Press `Pos1` / `Home` to toggle a frames-per-second display
   in the bottom-left corner.
 - **Always spinning.** The solid rotates around the vertical (z) axis at
@@ -142,7 +147,9 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 | `Space` | Switch to the next shape; while the model list is open, load the selected model. |
 | `Tab` | Toggle the model list on the right. While open, `Up`/`Down` or the mouse wheel move the selection, `Enter`/`Space` load it, and `Tab` closes it. |
 | `Page Up` / `Page Down` | Weaker / stronger LOD for meshes that were reduced (too many triangles). |
-| `Left` / `Right` | In the open model list: move the shape-colour slider (applied live). |
+| `Left` / `Right` | In the open model list: move the mesh-colour slider (applied live). |
+| `Shift`+`Left` / `Right` | In the open model list: move the light-source colour slider. |
+| `1` .. `5` | Console font size (`3` = current); the model keeps the same size. |
 | `Pos1` / `Home` | Toggle the FPS display in the bottom-left corner. |
 | `R` | Rescan the `models/` folder now. |
 | `q` | Quit (convenience alias for `ESC`). |
@@ -294,7 +301,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.5**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.6**. See [changelog.md](changelog.md) for details.
 
 ## Roadmap
 

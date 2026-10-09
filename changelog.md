@@ -4,6 +4,21 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.6] - 2026-10-09
+
+### Added
+- Console **font size** keys `1`..`5` (`3` = the current size). The row count
+  changes, but the model is re-fitted so it keeps the same on-screen size.
+- A second colour slider for the **light source** in the menu, below the mesh
+  colour; the characters are tinted from the mesh colour (shadow) to the light
+  colour (lit). Each slider has a small ASCII logo (`Left`/`Right` for mesh,
+  `Shift`+`Left`/`Right` for the light).
+
+### Changed
+- The fit-to-view scale is now **rotation-invariant**: it is computed once for
+  all spin angles (and re-used until the mesh, tilt, console size or font size
+  changes), so the model no longer grows/shrinks slightly while it turns.
+
 ## [0.2.5] - 2026-10-08
 
 ### Added
