@@ -31,9 +31,11 @@ Prebuilt Windows x64 binaries are on the
   embedded, ray-traced triangle meshes — see *Third-party assets*).
 - **Cycle at runtime.** The shapes are kept in a list in insertion order;
   press `SPACE` to switch to the next one without restarting.
-- **Bring your own models.** Drop `.stl`, `.obj`, `.ply` or `.off` files into a
+- **Bring your own models.** Drop `.stl`, `.obj`, `.ply`, `.off`, `.gltf`,
+  `.glb` or `.3mf` files into a
   `models/` folder next to the executable; they are detected automatically
-  (live) and added to the `SPACE` cycle. OBJ files may reference an `.mtl` for
+  (live) and added to the `SPACE` cycle. OBJ files may reference an `.mtl`, and
+  glTF/GLB/3MF files may carry material colours, for
   per-material colours. Meshes with too many triangles are
   reduced with a shape-preserving LOD instead of being rejected. An optional
   `<name>.json` sidecar can set the up axis, rotation, zoom and display name.
@@ -177,8 +179,8 @@ rescan. Press **`Tab`** for a scrollable list on the right that shows every
 available shape and model by name (file names without extension); pick with the
 arrow keys (or the mouse wheel) and load with `SPACE`/`ENTER`.
 
-- **Formats:** STL (binary and ASCII), OBJ, PLY (ASCII and binary
-  little-endian). Convert anything else (e.g. glTF) to one of these first.
+- **Formats:** STL (binary and ASCII), OBJ (+ MTL), PLY (ASCII and binary
+  little-endian), OFF (+ COFF/NOFF), glTF 2.0 (`.gltf`/`.glb`) and 3MF.
 - **Limits & LOD:** a file up to 128 MB and up to 5M triangles is read. A mesh
   with more than 500k triangles is **reduced with a shape-preserving LOD**
   (vertex-cluster decimation) instead of being rejected; `Page Up` / `Page Dn`
@@ -241,8 +243,12 @@ settles into a shallow debris layer on the floor the object was resting on.
 ```
 3DASCIIRotator/
   src/main.c            application source (shapes, rendering, registry)
-  src/loader.c          STL / OBJ / PLY readers
+  src/loader.c          STL / OBJ / PLY / OFF readers
   src/loader.h          loader interface
+  src/meshbuf.c/.h      small growable arrays shared by the loaders
+  src/gltf.c            glTF 2.0 / GLB reader (JSON + accessors + nodes)
+  src/inflate.c/.h      raw DEFLATE decompressor (for 3MF)
+  src/zip3mf.c          3MF reader (OPC/ZIP package + XML model)
   src/simplify.c        vertex-cluster LOD decimation
   src/simplify.h        simplify interface
   src/export.c          animated GIF / APNG writers

@@ -4,6 +4,17 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.19] - 2026-10-11
+
+### Added
+- **glTF 2.0** support (`.gltf` and binary `.glb`): a self-contained JSON
+  parser, the GLB container, accessors/bufferViews, buffers supplied as the GLB
+  BIN chunk, `data:` base64 URIs or external `.bin` files, the node hierarchy
+  with `matrix` or TRS transforms, and per-material `baseColorFactor` colours.
+- **3MF** support (`.3mf`): an OPC/ZIP reader with a from-scratch DEFLATE
+  decompressor, plus an XML model scanner that covers objects, meshes, base
+  materials and build items (including their transforms).
+
 ## [0.2.18] - 2026-10-11
 
 ### Added

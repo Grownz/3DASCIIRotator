@@ -9,6 +9,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 
 #include "loader.h"
+#include "meshbuf.h"
 
 #include <windows.h>
 #include <ctype.h>
@@ -19,52 +20,9 @@
 
 #define MAX_BYTES (128ull * 1024ull * 1024ull)
 
-static void seterr(char *e, int n, const char *m) {
+void seterr(char *e, int n, const char *m) {
     if (n > 0) { strncpy(e, m, (size_t)n - 1); e[n - 1] = '\0'; }
 }
-
-/* --------------------------------------------------------- growable arrays */
-typedef struct { float        *p; int n, cap; } FVec;
-typedef struct { unsigned int *p; int n, cap; } IVec;
-
-static int fpush(FVec *v, float x) {
-    if (v->n == v->cap) {
-        int nc = v->cap ? v->cap * 2 : 8192;
-        float *np = (float *)realloc(v->p, (size_t)nc * sizeof(float));
-        if (!np) return 0;
-        v->p = np; v->cap = nc;
-    }
-    v->p[v->n++] = x;
-    return 1;
-}
-
-static int ipush(IVec *v, unsigned int x) {
-    if (v->n == v->cap) {
-        int nc = v->cap ? v->cap * 2 : 8192;
-        unsigned int *np = (unsigned int *)realloc(v->p, (size_t)nc * sizeof(unsigned int));
-        if (!np) return 0;
-        v->p = np; v->cap = nc;
-    }
-    v->p[v->n++] = x;
-    return 1;
-}
-
-static void ffree(FVec *v) { free(v->p); v->p = NULL; v->n = v->cap = 0; }
-static void ifree(IVec *v) { free(v->p); v->p = NULL; v->n = v->cap = 0; }
-
-/* growable byte array (per-triangle RGB for OBJ+MTL) */
-typedef struct { unsigned char *p; int n, cap; } CVec;
-static int cpush(CVec *v, unsigned char x) {
-    if (v->n == v->cap) {
-        int nc = v->cap ? v->cap * 2 : 4096;
-        unsigned char *np = (unsigned char *)realloc(v->p, (size_t)nc);
-        if (!np) return 0;
-        v->p = np; v->cap = nc;
-    }
-    v->p[v->n++] = x;
-    return 1;
-}
-static void cfree(CVec *v) { free(v->p); v->p = NULL; v->n = v->cap = 0; }
 
 /* ------------------------------------------------------------- file access */
 static unsigned char *read_file(const wchar_t *path, size_t *out_size,
@@ -550,6 +508,9 @@ int loader_load(const wchar_t *path, int max_tris, RawMesh *out, char *err, int 
     else if (_wcsicmp(ext, L".obj") == 0)  ok = parse_obj(b, n, max_tris, path, out, err, errsz);
     else if (_wcsicmp(ext, L".ply") == 0)  ok = parse_ply(b, n, max_tris, out, err, errsz);
     else if (_wcsicmp(ext, L".off") == 0)  ok = parse_off(b, n, max_tris, out, err, errsz);
+    else if (_wcsicmp(ext, L".gltf") == 0) ok = gltf_load(b, n, path, max_tris, out, err, errsz);
+    else if (_wcsicmp(ext, L".glb") == 0)  ok = gltf_load(b, n, path, max_tris, out, err, errsz);
+    else if (_wcsicmp(ext, L".3mf") == 0)  ok = mf3_load(b, n, max_tris, out, err, errsz);
     else seterr(err, errsz, "unsupported format");
 
     free(b);

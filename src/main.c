@@ -1,12 +1,13 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.18
+ * 3D ASCII Rotator - version 0.2.19
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
  *
  * Shapes are analytic signed-distance fields (cube, cylinder, diamond, sphere)
- * or triangle meshes: the built-in models and any .stl/.obj/.ply dropped into
- * a "models" folder next to the executable, which is rescanned live.
+ * or triangle meshes: the built-in models and any .stl/.obj/.ply/.off/.gltf/
+ * .glb/.3mf dropped into a "models" folder next to the executable, which is
+ * rescanned live.
  *
  * Meshes are ray traced with a bounding-volume hierarchy and shaded flat;
  * analytic shapes use SDF ray marching. Luminance is mapped onto a 15-level
@@ -48,7 +49,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.18"
+#define APP_VERSION "0.2.19"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -1854,7 +1855,9 @@ static void models_poll(int force) {
             if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
             ext = wcsrchr(fd.cFileName, L'.');
             if (!ext) continue;
-            if (_wcsicmp(ext, L".stl") && _wcsicmp(ext, L".obj") && _wcsicmp(ext, L".ply") && _wcsicmp(ext, L".off")) continue;
+            if (_wcsicmp(ext, L".stl") && _wcsicmp(ext, L".obj") && _wcsicmp(ext, L".ply") &&
+                _wcsicmp(ext, L".off") && _wcsicmp(ext, L".gltf") && _wcsicmp(ext, L".glb") &&
+                _wcsicmp(ext, L".3mf")) continue;
             if (ne < (int)(sizeof(ents) / sizeof(ents[0]))) {
                 DirEnt *d = &ents[ne++];
                 _snwprintf(d->path, MAX_PATH, L"%ls\\%ls", g_models_dir, fd.cFileName);

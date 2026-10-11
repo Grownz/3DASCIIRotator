@@ -7,7 +7,7 @@ the shape list, cycled with `SPACE` like the built-in shapes.
 
 | Topic | Decision |
 | --- | --- |
-| Formats | STL (binary + ASCII), OBJ, PLY (ASCII + binary little-endian) |
+| Formats | STL (binary + ASCII), OBJ (+ MTL), PLY (ASCII + binary little-endian), OFF (+ COFF/NOFF), glTF 2.0 (.gltf/.glb), 3MF |
 | Limits | file <= 128 MB, triangles <= 500k (otherwise skipped + warning) |
 | Orientation | assume Z-up; interactive tilt still applies |
 | Folder / live | `models/` next to the exe, polled ~1 s, appended to the cycle |

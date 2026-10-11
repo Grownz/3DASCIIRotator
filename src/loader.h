@@ -18,4 +18,13 @@ typedef struct {
  * Returns 0 on failure and writes a short message to err. */
 int loader_load(const wchar_t *path, int max_tris, RawMesh *out, char *err, int errsz);
 
+/* Copies a short message into err (always NUL-terminated). */
+void seterr(char *e, int n, const char *m);
+
+/* glTF 2.0 (.gltf/.glb) and 3MF (.3mf); implemented in gltf.c / zip3mf.c. */
+int gltf_load(const unsigned char *b, size_t n, const wchar_t *path,
+              int max_tris, RawMesh *out, char *err, int errsz);
+int mf3_load(const unsigned char *b, size_t n, int max_tris,
+             RawMesh *out, char *err, int errsz);
+
 #endif /* LOADER_H */
