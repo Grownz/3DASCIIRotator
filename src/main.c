@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.16
+ * 3D ASCII Rotator - version 0.2.17
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -48,7 +48,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.16"
+#define APP_VERSION "0.2.17"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -210,8 +210,8 @@ static void ramp_rev_init(void) {
 /* Move one of the two colour sliders and rebuild the gradient. */
 static void color_step(int *sel, int *color, int delta) {
     *sel += delta;
-    if (*sel < 0) *sel = 0;
-    if (*sel >= COLOR_N) *sel = COLOR_N - 1;
+    if (*sel < 0) *sel = COLOR_N - 1;          /* wrap around at both ends */
+    if (*sel >= COLOR_N) *sel = 0;
     *color = COLORS[*sel];
     grad_build();
 }
@@ -1872,12 +1872,13 @@ static void print_help(void) {
         "                       in %d deg steps (max %d deg)\n"
         "  ENTER                Shatter the object; press again to rebuild it\n"
         "  SPACE                Switch to the next shape (insertion order)\n"
-        "  TAB                  Toggle the model list on the right; then pick\n"
-        "                       with Up/Down (tilt pauses) and load with\n"
-        "                       SPACE/ENTER; scroll with the mouse wheel\n"
+        "  TAB                  Toggle the model list on the right; pick with\n"
+        "                       Up/Down (wraps around; tilt pauses), load with\n"
+        "                       SPACE/ENTER, and the selection is loaded when\n"
+        "                       you close the list with TAB\n"
         "  LEFT / RIGHT         In the list: move the mesh-colour slider\n"
-        "                       (256-colour scale, applied live)\n"
-        "  SHIFT+LEFT / RIGHT   Move the light-source colour slider\n"
+        "                       (256-colour scale, applied live, wraps around)\n"
+        "  SHIFT+LEFT / RIGHT   Move the light-source colour slider (wraps)\n"
         "  PAGE UP / PAGE DOWN  Weaker / stronger LOD for meshes that were\n"
         "                       reduced from too many triangles\n"
         "  POS1 (HOME)          Toggle the FPS display (bottom-left)\n"
@@ -2490,10 +2491,10 @@ int main(int argc, char **argv) {
                             char ch = r->Event.KeyEvent.uChar.AsciiChar;
                             DWORD cks = r->Event.KeyEvent.dwControlKeyState;
                             if (g_menu_open) {
-                                if (vk == VK_TAB) g_menu_open = 0;
+                                if (vk == VK_TAB) { g_menu_open = 0; select_index(g_menu_sel); }
                                 else if (vk == VK_ESCAPE) g_running = 0;
-                                else if (vk == VK_UP)   { if (g_menu_sel > 0) --g_menu_sel; }
-                                else if (vk == VK_DOWN) { if (g_menu_sel < g_item_count - 1) ++g_menu_sel; }
+                                else if (vk == VK_UP)   { if (g_menu_sel > 0) --g_menu_sel; else g_menu_sel = g_item_count - 1; }
+                                else if (vk == VK_DOWN) { if (g_menu_sel < g_item_count - 1) ++g_menu_sel; else g_menu_sel = 0; }
                                 else if (vk == VK_RETURN || vk == VK_SPACE) select_index(g_menu_sel);
                                 else if (ch == '+' || ch == '=') { g_speed += SPEED_STEP; if (g_speed > MAX_SPEED) g_speed = MAX_SPEED; }
                                 else if (ch == '-' || ch == '_') { g_speed -= SPEED_STEP; if (g_speed < MIN_SPEED) g_speed = MIN_SPEED; }
@@ -2534,8 +2535,8 @@ int main(int argc, char **argv) {
                         } else if (r->EventType == MOUSE_EVENT && g_menu_open) {
                             if (r->Event.MouseEvent.dwEventFlags == MOUSE_WHEELED) {
                                 short d = (short)HIWORD(r->Event.MouseEvent.dwButtonState);
-                                if (d > 0) { if (g_menu_sel > 0) --g_menu_sel; }
-                                else if (d < 0) { if (g_menu_sel < g_item_count - 1) ++g_menu_sel; }
+                                if (d > 0) { if (g_menu_sel > 0) --g_menu_sel; else g_menu_sel = g_item_count - 1; }
+                                else if (d < 0) { if (g_menu_sel < g_item_count - 1) ++g_menu_sel; else g_menu_sel = 0; }
                             }
                         }
                     }

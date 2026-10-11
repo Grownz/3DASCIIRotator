@@ -4,6 +4,14 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.17] - 2026-10-11
+
+### Added
+- The model list and the two colour sliders now **wrap around** at both ends
+  (`Up`/`Down` and the mouse wheel for the list, `Left`/`Right` and
+  `Shift`+`Left`/`Right` for the colours).
+- Closing the model list with `Tab` now **loads the currently selected model**.
+
 ## [0.2.16] - 2026-10-11
 
 ### Added

@@ -158,10 +158,10 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 | `Up` / `Down` | Tilt the spin axis away from / towards the viewer in 5 deg steps (maximum 90 deg). Paused while the model list is open. |
 | `Enter` | Shatter the solid; press again to rebuild it. |
 | `Space` | Switch to the next shape; while the model list is open, load the selected model. |
-| `Tab` | Toggle the model list on the right. While open, `Up`/`Down` or the mouse wheel move the selection, `Enter`/`Space` load it, and `Tab` closes it. |
+| `Tab` | Toggle the model list on the right. While open, `Up`/`Down` or the mouse wheel move the selection (wrapping around at both ends), `Enter`/`Space` load it, and closing with `Tab` loads the current selection. |
 | `Page Up` / `Page Down` | Weaker / stronger LOD for meshes that were reduced (too many triangles). |
-| `Left` / `Right` | In the open model list: move the mesh-colour slider (applied live). |
-| `Shift`+`Left` / `Right` | In the open model list: move the light-source colour slider. |
+| `Left` / `Right` | In the open model list: move the mesh-colour slider (applied live, wraps around). |
+| `Shift`+`Left` / `Right` | In the open model list: move the light-source colour slider (wraps around). |
 | `Pos1` / `Home` | Toggle the FPS display in the bottom-left corner. |
 | `g` / `p` | Export a full 360-degree turn as an animated GIF / APNG (current colours, tilt and speed; transparent background, no HUD). |
 | `R` | Rescan the `models/` folder now. |
@@ -316,7 +316,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.16**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.17**. See [changelog.md](changelog.md) for details.
 
 ## Roadmap
 
