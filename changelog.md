@@ -4,6 +4,15 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.14] - 2026-10-11
+
+### Changed
+- Animation export: the frame time is now **adaptive** so the animation plays at
+  at least ~30 fps (a frame every ~33 ms) while a full turn is captured
+  smoothly. The frame count follows the spin speed (a full turn lasts
+  `360/speed` seconds), so slow spins get more frames instead of a slow, choppy
+  playback.
+
 ## [0.2.13] - 2026-10-09
 
 ### Changed

@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.13
+ * 3D ASCII Rotator - version 0.2.14
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -48,7 +48,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.13"
+#define APP_VERSION "0.2.14"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -2120,7 +2120,7 @@ static void export_status(HANDLE h, int is_console, int i, int n) {
 /* Export a full 360-degree turn to `path` (GIF if apng==0, else APNG). */
 #define EXPORT_MAXDIM 1280
 static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, int rows, int apng) {
-    const int NF = 72;                 /* 5 degrees per frame */
+    int NF;
     Canvas cv;
     unsigned char grad_rgb[RAMP_N * 3];
     unsigned char gifpal[32 * 3];
@@ -2142,6 +2142,16 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
     size_t npix, fbytes, cbytes;
 
     if (cols <= 0 || rows <= 0) return 0;
+
+    /* Adaptive frame time: at least ~30 fps, and a full turn (whose length
+     * follows the spin speed, 360/speed seconds) captured smoothly. */
+    {
+        double sp = g_speed > 0.1 ? g_speed : 15.0;
+        double dur = 360.0 / sp;
+        NF = (int)(dur / 0.03 + 0.5);        /* ~33 fps (>= 30) */
+        if (NF < 24) NF = 24;
+        if (NF > 3600) NF = 3600;
+    }
 
     /* colours for the 15 ramp levels (level 0 is the transparent space) */
     for (i = 0; i < RAMP_N; ++i) {
@@ -2227,16 +2237,15 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
     idx = (unsigned char *)malloc(npix);
     if (!idx) { free(crop); free(frames); canvas_end(&cv); msg_setf("export: out of memory"); return 0; }
 
-    /* frame time derived from the rotation speed: a full turn takes
-     * 360/speed seconds, split evenly over the frames. */
+    /* frame time so the animation plays at >= 30 fps while a full turn lasts
+     * 360/speed seconds (adaptive frame count) */
     {
         double sp = g_speed > 0.1 ? g_speed : 15.0;
-        double dt = (360.0 / (double)NF) / sp;      /* seconds per frame */
-        delay_cs = (int)(dt * 100.0 + 0.5);  if (delay_cs < 2) delay_cs = 2;
-        delay_num = (int)((360.0 / (double)NF) * 100.0);
-        delay_den = (int)(sp * 100.0);
+        double dt = (360.0 / sp) / (double)NF;   /* seconds per frame */
+        delay_cs = (int)(dt * 100.0 + 0.5);  if (delay_cs < 1) delay_cs = 1;
+        delay_num = (int)(dt * 10000.0 + 0.5);
+        delay_den = 10000;
         if (delay_num < 1) delay_num = 1;
-        if (delay_den < 1) delay_den = 1;
     }
 
     if (apng) aw = apng_begin(path, cv.w, cv.h, NF, apngpal, trns, 1 + 2 * un);
