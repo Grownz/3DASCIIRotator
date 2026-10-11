@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   smoothly. The frame count follows the spin speed (a full turn lasts
   `360/speed` seconds), so slow spins get more frames instead of a slow, choppy
   playback.
+- Fixed the APNG frame-delay field, which was written little-endian (PNG
+  requires big-endian) and made viewers read a wrong, much longer delay.
 
 ## [0.2.13] - 2026-10-09
 

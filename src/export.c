@@ -38,8 +38,8 @@ static int buf_u8(Buf *b, unsigned v) {
     b->p[b->n++] = (unsigned char)v;
     return 1;
 }
-static int buf_u16le(Buf *b, unsigned v) {
-    return buf_u8(b, v & 0xFF) && buf_u8(b, (v >> 8) & 0xFF);
+static int buf_u16be(Buf *b, unsigned v) {
+    return buf_u8(b, (v >> 8) & 0xFF) && buf_u8(b, v & 0xFF);
 }
 static int buf_u32be(Buf *b, unsigned v) {
     return buf_u8(b, (v >> 24) & 0xFF) && buf_u8(b, (v >> 16) & 0xFF) &&
@@ -389,7 +389,7 @@ int apng_frame(ApngWriter *a, const unsigned char *idx, int delay_num, int delay
     buf_u32be(&fcTL, a->seq++);
     buf_u32be(&fcTL, (unsigned)a->w); buf_u32be(&fcTL, (unsigned)a->h);
     buf_u32be(&fcTL, 0); buf_u32be(&fcTL, 0);            /* x, y offset */
-    buf_u16le(&fcTL, (unsigned)delay_num); buf_u16le(&fcTL, (unsigned)delay_den);
+    buf_u16be(&fcTL, (unsigned)delay_num); buf_u16be(&fcTL, (unsigned)delay_den);
     buf_u8(&fcTL, 0);                                     /* dispose: none */
     buf_u8(&fcTL, 0);                                     /* blend: source */
     png_chunk(a->f, "fcTL", fcTL.p, fcTL.n);
