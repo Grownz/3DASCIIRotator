@@ -323,7 +323,11 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.18**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.20**. See [changelog.md](changelog.md) for details.
+
+Each entry on the [releases page](https://github.com/Grownz/3DASCIIRotator/releases)
+uses the same note format: a one-line summary, a short labelled list of the
+changes, and a closing `Requirements:` line.
 
 ## Roadmap
 

@@ -7,23 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [0.2.20] - 2026-10-11
 
 ### Added
-- **OBJ** faces are read in every index form — `v`, `v/vt`, `v//vn` and
-  `v/vt/vn` — so files that carry texture or normal indices load as intended.
+- **OBJ** faces are read in every index form (`v`, `v/vt`, `v//vn` and
+  `v/vt/vn`), so files that carry texture or normal indices load as intended.
 
 ### Changed
-- Meshes now use the same **adaptive 2×2 supersampling** as the analytic
-  shapes (only cells next to a luminance edge are sampled four times), which
-  raises the frame rate for detailed models.
-- The shading hot path expresses the Blinn-Phong highlight and the fresnel rim
-  with plain multiplications instead of `pow()`.
+- Meshes now use the same **adaptive 2x2 supersampling** as the analytic
+  shapes (only cells beside a luminance edge are sampled four times), for a
+  higher frame rate on detailed models.
+- The shading hot path uses plain multiplications instead of `pow()` for the
+  Blinn-Phong highlight and the fresnel rim.
 
 ## [0.2.19] - 2026-10-11
 
 ### Added
 - **glTF 2.0** support (`.gltf` and binary `.glb`): a self-contained JSON
-  parser, the GLB container, accessors/bufferViews, buffers supplied as the GLB
-  BIN chunk, `data:` base64 URIs or external `.bin` files, the node hierarchy
-  with `matrix` or TRS transforms, and per-material `baseColorFactor` colours.
+  parser, the GLB container, accessors and bufferViews, buffers supplied as the
+  GLB BIN chunk, `data:` base64 URIs or external `.bin` files, the node
+  hierarchy with `matrix` or TRS transforms, and per-material `baseColorFactor`
+  colours.
 - **3MF** support (`.3mf`): an OPC/ZIP reader with a from-scratch DEFLATE
   decompressor, plus an XML model scanner that covers objects, meshes, base
   materials and build items (including their transforms).
