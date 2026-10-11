@@ -4,6 +4,16 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.18] - 2026-10-11
+
+### Added
+- **OFF** support (`.off`, including COFF/NOFF by ignoring the extra per-vertex
+  data) — a simple indexed text format.
+- **OBJ + MTL**: OBJ files may reference `.mtl` material libraries; each
+  material's diffuse colour (`Kd`) is applied per triangle, so multi-material
+  models render (and export) with distinct colours (each material colour is
+  blended to the light colour by luminance, like the global mesh colour).
+
 ## [0.2.17] - 2026-10-11
 
 ### Added

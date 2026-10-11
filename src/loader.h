@@ -3,10 +3,13 @@
 
 #include <wchar.h>
 
-/* A parsed triangle mesh: verts is 3*nvert floats, tris is 3*ntri indices. */
+/* A parsed triangle mesh: verts is 3*nvert floats, tris is 3*ntri indices.
+ * face_rgb is optional: 3 bytes (R,G,B) per triangle from an OBJ+MTL material,
+ * or NULL when the format has no colours. */
 typedef struct {
-    float        *verts;
-    unsigned int *tris;
+    float         *verts;
+    unsigned int  *tris;
+    unsigned char *face_rgb;
     int nvert, ntri;
 } RawMesh;
 

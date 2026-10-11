@@ -52,6 +52,20 @@ static int ipush(IVec *v, unsigned int x) {
 static void ffree(FVec *v) { free(v->p); v->p = NULL; v->n = v->cap = 0; }
 static void ifree(IVec *v) { free(v->p); v->p = NULL; v->n = v->cap = 0; }
 
+/* growable byte array (per-triangle RGB for OBJ+MTL) */
+typedef struct { unsigned char *p; int n, cap; } CVec;
+static int cpush(CVec *v, unsigned char x) {
+    if (v->n == v->cap) {
+        int nc = v->cap ? v->cap * 2 : 4096;
+        unsigned char *np = (unsigned char *)realloc(v->p, (size_t)nc);
+        if (!np) return 0;
+        v->p = np; v->cap = nc;
+    }
+    v->p[v->n++] = x;
+    return 1;
+}
+static void cfree(CVec *v) { free(v->p); v->p = NULL; v->n = v->cap = 0; }
+
 /* ------------------------------------------------------------- file access */
 static unsigned char *read_file(const wchar_t *path, size_t *out_size,
                                 char *err, int errsz) {
@@ -152,13 +166,145 @@ static int parse_stl(const unsigned char *b, size_t n, int max_tris,
     }
 }
 
+/* ------------------------------------------------------------------- OFF */
+/* Line-based reader: returns the pointer past the line and sets *ls/*le. */
+static const char *off_line(const char *s, const char *e, const char **ls, const char **le) {
+    while (s < e && (*s == '\r' || *s == '\n')) ++s;
+    if (s >= e) return NULL;
+    *ls = s;
+    while (s < e && *s != '\n' && *s != '\r') ++s;
+    *le = s;
+    while (s < e && (*s == '\r' || *s == '\n')) ++s;
+    return s;
+}
+
+static int parse_off(const unsigned char *b, size_t n, int max_tris,
+                     RawMesh *out, char *err, int errsz) {
+    const char *s = (const char *)b, *e = s + n;
+    const char *ls, *le, *t;
+    int nv = 0, nf = 0, i;
+    FVec V = {0};
+    IVec T = {0};
+
+    s = off_line(s, e, &ls, &le);
+    if (!s) { seterr(err, errsz, "bad OFF header"); return 0; }
+    {
+        int off = 0;
+        for (t = ls; t + 2 < le; ++t)
+            if ((t[0] == 'O' || t[0] == 'o') && (t[1] == 'F' || t[1] == 'f') && (t[2] == 'F' || t[2] == 'f')) { off = 1; break; }
+        if (!off) { seterr(err, errsz, "not an OFF file"); return 0; }
+        t += 3;
+        while (t < le && !(*t >= '0' && *t <= '9')) ++t;
+        if (t >= le) { s = off_line(s, e, &ls, &le); if (!s) { seterr(err, errsz, "bad OFF header"); return 0; } t = ls; }
+        { char *en; nv = (int)strtol(t, &en, 10); nf = (int)strtol(en, &en, 10); }
+    }
+    if (nv < 0 || nf < 0) { seterr(err, errsz, "bad OFF counts"); return 0; }
+    if (nf > max_tris) { seterr(err, errsz, "too many triangles"); return 0; }
+
+    for (i = 0; i < nv; ++i) {
+        float x, y, z; char *en;
+        s = off_line(s, e, &ls, &le);
+        if (!s) { ffree(&V); seterr(err, errsz, "truncated OFF"); return 0; }
+        x = strtof(ls, &en); y = strtof(en, &en); z = strtof(en, &en);
+        if (!fpush(&V, x) || !fpush(&V, y) || !fpush(&V, z)) { ffree(&V); seterr(err, errsz, "out of memory"); return 0; }
+    }
+    for (i = 0; i < nf; ++i) {
+        unsigned int idx[64];
+        int k = 0, c, j;
+        char *en;
+        s = off_line(s, e, &ls, &le);
+        if (!s) { ffree(&V); ifree(&T); seterr(err, errsz, "truncated OFF"); return 0; }
+        c = (int)strtol(ls, &en, 10);
+        if (c < 0) c = 0;
+        if (c > 64) c = 64;
+        t = en;
+        for (j = 0; j < c; ++j) {
+            long vi = strtol(t, &en, 10);
+            t = en;
+            if (vi >= 0 && vi < nv && k < 64) idx[k++] = (unsigned int)vi;
+        }
+        for (j = 2; j < k; ++j) {
+            if (!ipush(&T, idx[0]) || !ipush(&T, idx[j - 1]) || !ipush(&T, idx[j])) {
+                ffree(&V); ifree(&T); seterr(err, errsz, "out of memory"); return 0;
+            }
+            if (T.n / 3 > max_tris) { ffree(&V); ifree(&T); seterr(err, errsz, "too many triangles"); return 0; }
+        }
+    }
+    out->nvert = V.n / 3;
+    out->ntri = T.n / 3;
+    if (out->nvert == 0 || out->ntri == 0) { ffree(&V); ifree(&T); seterr(err, errsz, "no triangles"); return 0; }
+    out->verts = V.p;
+    out->tris = T.p;
+    out->face_rgb = NULL;
+    return 1;
+}
+
+/* --------------------------------------------------------- OBJ materials */
+#define MTL_MAX 128
+typedef struct { char name[64]; unsigned char rgb[3]; } Mtl;
+
+static void mtl_load(const wchar_t *obj_path, const char *name, Mtl *mats, int *nmat) {
+    wchar_t wp[MAX_PATH], wname[128];
+    const wchar_t *slash = wcsrchr(obj_path, L'\\');
+    size_t dlen = slash ? (size_t)(slash - obj_path + 1) : 0;
+    unsigned char *b;
+    size_t n = 0;
+    char err[32];
+    int i;
+
+    if (dlen >= MAX_PATH - 2 || !name[0]) return;
+    wcsncpy(wp, obj_path, dlen); wp[dlen] = 0;
+    for (i = 0; name[i] && i < 127; ++i) wname[i] = (wchar_t)(unsigned char)name[i];
+    wname[i] = 0;
+    if (wcslen(wp) + wcslen(wname) >= MAX_PATH) return;
+    wcscat(wp, wname);
+    b = read_file(wp, &n, err, sizeof(err));
+    if (!b) return;
+    {
+        char *s = (char *)b, *e = s + n;
+        while (s < e) {
+            char *ls = s, *le;
+            while (s < e && *s != '\n' && *s != '\r') ++s;
+            le = s;
+            while (s < e && (*s == '\n' || *s == '\r')) ++s;
+            while (ls < le && (*ls == ' ' || *ls == '\t')) ++ls;
+            if (le - ls >= 6 && strncmp(ls, "newmtl", 6) == 0) {
+                char *t = ls + 6;
+                if (*nmat < MTL_MAX) {
+                    Mtl *m = &mats[*nmat];
+                    int k = 0;
+                    while (t < le && (*t == ' ' || *t == '\t')) ++t;
+                    while (t < le && k < 63) m->name[k++] = *t++;
+                    m->name[k] = 0;
+                    m->rgb[0] = m->rgb[1] = m->rgb[2] = 200;
+                    ++(*nmat);
+                }
+            } else if (le - ls >= 2 && ls[0] == 'K' && ls[1] == 'd' && *nmat > 0) {
+                float r, g, bl; char *en;
+                r = strtof(ls + 2, &en); g = strtof(en, &en); bl = strtof(en, &en);
+                {
+                    Mtl *m = &mats[*nmat - 1];
+                    m->rgb[0] = (unsigned char)(r * 255.0f + 0.5f);
+                    m->rgb[1] = (unsigned char)(g * 255.0f + 0.5f);
+                    m->rgb[2] = (unsigned char)(bl * 255.0f + 0.5f);
+                }
+            }
+        }
+    }
+    free(b);
+}
+
 /* ------------------------------------------------------------------- OBJ */
 /* Note: the buffer is modified in place (newlines are turned into NULs), so it
  * is taken non-const. It is the private read buffer, freed by the caller. */
-static int parse_obj(unsigned char *b, size_t n, int max_tris,
+static int parse_obj(unsigned char *b, size_t n, int max_tris, const wchar_t *path,
                      RawMesh *out, char *err, int errsz) {
     FVec V = {0};
     IVec T = {0};
+    CVec F = {0};
+    Mtl  mats[MTL_MAX];
+    int  nmat = 0, used_mat = 0;
+    unsigned char curmat[3] = { 200, 200, 200 };
     char *buf = (char *)b;
     char *line, *next;
     if (n == 0) { seterr(err, errsz, "empty file"); return 0; }
@@ -174,6 +320,19 @@ static int parse_obj(unsigned char *b, size_t n, int max_tris,
             if (!fpush(&V, x) || !fpush(&V, y) || !fpush(&V, z)) {
                 ffree(&V); ifree(&T); seterr(err, errsz, "out of memory"); return 0;
             }
+        } else if (p[0] == 'm' && strncmp(p, "mtllib", 6) == 0 && (p[6] == ' ' || p[6] == '\t')) {
+            char *t = p + 6, *z;
+            while (*t == ' ' || *t == '\t') ++t;
+            z = t; while (*z && *z != ' ' && *z != '\t' && *z != '\r') ++z; *z = '\0';
+            mtl_load(path, t, mats, &nmat);
+        } else if (p[0] == 'u' && strncmp(p, "usemtl", 6) == 0 && (p[6] == ' ' || p[6] == '\t')) {
+            char *t = p + 6, *z;
+            int k;
+            while (*t == ' ' || *t == '\t') ++t;
+            z = t; while (*z && *z != ' ' && *z != '\t' && *z != '\r') ++z; *z = '\0';
+            used_mat = 1;
+            for (k = 0; k < nmat; ++k)
+                if (strcmp(mats[k].name, t) == 0) { curmat[0] = mats[k].rgb[0]; curmat[1] = mats[k].rgb[1]; curmat[2] = mats[k].rgb[2]; break; }
         } else if (p[0] == 'f' && (p[1] == ' ' || p[1] == '\t')) {
             unsigned int idx[64];
             int k = 0, i;
@@ -193,11 +352,12 @@ static int parse_obj(unsigned char *b, size_t n, int max_tris,
                 t = end;
             }
             for (i = 2; i < k; ++i) {              /* fan triangulate */
-                if (!ipush(&T, idx[0]) || !ipush(&T, idx[i - 1]) || !ipush(&T, idx[i])) {
-                    ffree(&V); ifree(&T); seterr(err, errsz, "out of memory"); return 0;
+                if (!ipush(&T, idx[0]) || !ipush(&T, idx[i - 1]) || !ipush(&T, idx[i]) ||
+                    !cpush(&F, curmat[0]) || !cpush(&F, curmat[1]) || !cpush(&F, curmat[2])) {
+                    ffree(&V); ifree(&T); cfree(&F); seterr(err, errsz, "out of memory"); return 0;
                 }
                 if (T.n / 3 > max_tris) {
-                    ffree(&V); ifree(&T); seterr(err, errsz, "too many triangles"); return 0;
+                    ffree(&V); ifree(&T); cfree(&F); seterr(err, errsz, "too many triangles"); return 0;
                 }
             }
         }
@@ -209,6 +369,8 @@ static int parse_obj(unsigned char *b, size_t n, int max_tris,
     }
     out->verts = V.p;
     out->tris = T.p;
+    if (used_mat && F.n >= 3) out->face_rgb = F.p;
+    else { cfree(&F); out->face_rgb = NULL; }
     return 1;
 }
 
@@ -379,17 +541,18 @@ int loader_load(const wchar_t *path, int max_tris, RawMesh *out, char *err, int 
     size_t n = 0;
     int ok = 0;
 
-    out->verts = NULL; out->tris = NULL; out->nvert = out->ntri = 0;
+    out->verts = NULL; out->tris = NULL; out->face_rgb = NULL; out->nvert = out->ntri = 0;
     if (!ext) { seterr(err, errsz, "no extension"); return 0; }
     b = read_file(path, &n, err, errsz);
     if (!b) return 0;
 
     if (_wcsicmp(ext, L".stl") == 0)       ok = parse_stl(b, n, max_tris, out, err, errsz);
-    else if (_wcsicmp(ext, L".obj") == 0)  ok = parse_obj(b, n, max_tris, out, err, errsz);
+    else if (_wcsicmp(ext, L".obj") == 0)  ok = parse_obj(b, n, max_tris, path, out, err, errsz);
     else if (_wcsicmp(ext, L".ply") == 0)  ok = parse_ply(b, n, max_tris, out, err, errsz);
+    else if (_wcsicmp(ext, L".off") == 0)  ok = parse_off(b, n, max_tris, out, err, errsz);
     else seterr(err, errsz, "unsupported format");
 
     free(b);
-    if (!ok) { free(out->verts); free(out->tris); out->verts = NULL; out->tris = NULL; }
+    if (!ok) { free(out->verts); free(out->tris); free(out->face_rgb); out->verts = NULL; out->tris = NULL; out->face_rgb = NULL; }
     return ok;
 }

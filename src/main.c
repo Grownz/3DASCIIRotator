@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.17
+ * 3D ASCII Rotator - version 0.2.18
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -48,7 +48,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.17"
+#define APP_VERSION "0.2.18"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -73,6 +73,7 @@
 #define SUPER_TH       0.03  /* edge threshold for adaptive 2x2     */
 #define MAX_MODELS   32      /* max user models kept                */
 #define BVH_CACHE     3      /* BVHs kept alive (LRU)               */
+#define MAT_MAX     128      /* max distinct OBJ+MTL material colours */
 
 #define PI 3.14159265358979323846
 
@@ -121,8 +122,17 @@ static unsigned char g_grad[RAMP_N];              /* ramp level -> palette idx *
 static signed char   g_ramp_rev[256];             /* ramp char  -> level       */
 static short *g_cc = NULL;                         /* per-cell colour override */
 static int    g_cc_cap = 0;
+static short *g_cellfg = NULL;                     /* per-cell foreground colour */
+static int    g_cellfg_cap = 0;
 static double *g_lum = NULL;                       /* per-cell luminance buffer */
 static int    g_lum_cap = 0;
+
+static void cellfg_ensure(int n) {
+    if (n > g_cellfg_cap) {
+        short *p = (short *)realloc(g_cellfg, sizeof(short) * (size_t)n);
+        if (p) { g_cellfg = p; g_cellfg_cap = n; }
+    }
+}
 
 static void lum_ensure(int n) {
     if (n > g_lum_cap) {
@@ -313,6 +323,10 @@ typedef struct {
     double   zoom;    /* multiplier on the auto-fit scale                  */
     float   *tdata;   /* ntri*9: the three vertices, packed per triangle   */
     int      fit_stride; /* vertex sampling stride for the silhouette fit  */
+    /* optional per-triangle material colour (OBJ+MTL): face_mat indexes matpal */
+    unsigned char *face_mat;
+    unsigned char  matpal[MAT_MAX * 3];
+    int            nmat;
     float    bmin[3], bmax[3]; /* object-space bounding box                 */
     int      owned;   /* 1 = verts/tris are malloc'd (free on destroy)     */
     int      built;   /* 1 = BVH is built                                  */
@@ -322,6 +336,37 @@ typedef struct {
     int      src_nvert, src_ntri;
     int      lod_level;
 } MeshDef;
+
+static MeshDef *g_mesh;   /* forward declaration (defined with the registry) */
+
+static unsigned char g_matgrad[MAT_MAX * RAMP_N];  /* per-material ramp gradient */
+static unsigned char g_matgrad_light = 0xFF;
+static MeshDef       *g_matgrad_mesh = NULL;
+
+/* Build the per-material ramp gradients (material colour -> light colour) for
+ * the current mesh; only called when the mesh or the light colour changes. */
+static void mesh_matgrad(MeshDef *m) {
+    int k, i, lr, lg, lb;
+    if (!m || m->nmat <= 0) return;
+    palette_rgb(g_light_color, &lr, &lg, &lb);
+    for (k = 0; k < m->nmat; ++k) {
+        int mr = m->matpal[k * 3], mg = m->matpal[k * 3 + 1], mb = m->matpal[k * 3 + 2];
+        for (i = 0; i < RAMP_N; ++i) {
+            double t = (double)i / (RAMP_N - 1);
+            int r = (int)(mr + (lr - mr) * t + 0.5);
+            int g = (int)(mg + (lg - mg) * t + 0.5);
+            int b = (int)(mb + (lb - mb) * t + 0.5);
+            g_matgrad[k * RAMP_N + i] = (unsigned char)nearest_color(r, g, b);
+        }
+    }
+}
+
+/* Foreground palette index for a ramp level, using the hit material if any. */
+static int cell_colour(int level, int mat) {
+    if (mat >= 0 && g_mesh && g_mesh->nmat > 0 && mat < g_mesh->nmat)
+        return g_matgrad[mat * RAMP_N + level];
+    return g_grad[level];
+}
 
 static int g_bvh_n = 0;          /* node counter while building        */
 static int g_axis  = 0;          /* split axis while sorting           */
@@ -535,6 +580,7 @@ static void mesh_destroy(MeshDef *m) {
         free((void *)m->tris);
         free((void *)m->src_verts);
         free((void *)m->src_tris);
+        free(m->face_mat);
     }
     free(m);
 }
@@ -909,11 +955,12 @@ static void update_camera(void) {
 }
 
 /* Returns luminance in [0,1] for a single view-plane ray (0 = background). */
-static double shade_ray(double hx, double vz) {
+static double shade_ray(double hx, double vz, int *matout) {
     v3 ro   = g_cam_ro;
     v3 rd   = v3_norm(v3_add(v3_add(v3_mul(g_cam_fwd, CAM_DIST), v3_mul(g_cam_right, hx)),
                              v3_mul(g_cam_up, vz)));
     v3 view = v3_mul(rd, -1.0);
+    if (matout) *matout = -1;
 
     if (g_mesh) {
         /* ray trace the embedded triangle mesh (sharp silhouette) */
@@ -925,6 +972,8 @@ static double shade_ray(double hx, double vz) {
         v3 n;
         const float *a, *b, *c;
         if (!mesh_trace(g_mesh, ro2, rd2, &t, &tri)) return 0.0;
+        if (matout && g_mesh->face_mat && tri >= 0 && tri < g_mesh->ntri)
+            *matout = g_mesh->face_mat[tri];
         a = &g_mesh->tdata[(size_t)tri * 9]; b = a + 3; c = a + 6;
         n = v3_norm(v3_make(
                 (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]),
@@ -957,15 +1006,17 @@ static double shade_ray(double hx, double vz) {
 }
 
 /* 2x2 supersampled luminance for one character cell (1x for heavy meshes). */
-static double shade_cell(double cx, double cy, int cols, int rows) {
+static double shade_cell(double cx, double cy, int cols, int rows, int *matout) {
     double ox, oy, a, b, c, d;
-    if (!g_super) return shade_ray(cx, cy);
+    int m0 = -1;
+    if (!g_super) return shade_ray(cx, cy, matout);
     ox = 0.5 / (double)cols;
     oy = 0.5 / (double)rows;
-    a = shade_ray(cx - ox, cy - oy);
-    b = shade_ray(cx + ox, cy - oy);
-    c = shade_ray(cx - ox, cy + oy);
-    d = shade_ray(cx + ox, cy + oy);
+    a = shade_ray(cx - ox, cy - oy, &m0);
+    b = shade_ray(cx + ox, cy - oy, NULL);
+    c = shade_ray(cx - ox, cy + oy, NULL);
+    d = shade_ray(cx + ox, cy + oy, NULL);
+    if (matout) *matout = m0;
     return (a + b + c + d) * 0.25;
 }
 
@@ -1061,23 +1112,24 @@ static void render_rows(int r0, int r1, void *vctx) {
             double hx = (((double)cc + 0.5) / (double)c->cols * 2.0 - 1.0) * VIEW_HALF * c->aspect;
             size_t idx = (size_t)r * c->cols + cc;
             double L;
+            int mat = -1;
             if (c->pass == 0) {
-                c->grid[idx] = lum_char(shade_ray(hx, vz));
+                L = shade_ray(hx, vz, &mat);
             } else if (c->pass == 3) {
-                c->grid[idx] = lum_char(shade_cell(hx, vz, c->cols, c->rows));
+                L = shade_cell(hx, vz, c->cols, c->rows, &mat);
             } else if (c->pass == 1) {
-                L = shade_ray(hx, vz);
+                L = shade_ray(hx, vz, &mat);
                 if (g_lum) g_lum[idx] = L;
-                c->grid[idx] = lum_char(L);
             } else {                                     /* pass 2: adaptive edges */
                 L = g_lum[idx];
                 if ((cc > 0               && fabs(L - g_lum[idx - 1]) > SUPER_TH) ||
                     (cc < c->cols - 1     && fabs(L - g_lum[idx + 1]) > SUPER_TH) ||
                     (r > 0                && fabs(L - g_lum[idx - c->cols]) > SUPER_TH) ||
                     (r < c->rows - 1      && fabs(L - g_lum[idx + c->cols]) > SUPER_TH))
-                    L = shade_cell(hx, vz, c->cols, c->rows);
-                c->grid[idx] = lum_char(L);
+                    L = shade_cell(hx, vz, c->cols, c->rows, &mat);
             }
+            c->grid[idx] = lum_char(L);
+            if (g_cellfg) g_cellfg[idx] = (short)cell_colour(g_ramp_rev[(unsigned char)c->grid[idx]], mat);
         }
     }
 }
@@ -1104,6 +1156,14 @@ static void render_grid(char *grid, int cols, int rows) {
         if (g_mesh) g_mesh_scale = g_scale_value;
         else        g_analytic_scale = g_scale_value;
     }
+    /* per-material colour gradients (only for OBJ+MTL meshes) */
+    if (g_mesh && g_mesh->nmat > 0 &&
+        (g_mesh != g_matgrad_mesh || (unsigned char)g_light_color != g_matgrad_light)) {
+        mesh_matgrad(g_mesh);
+        g_matgrad_mesh = g_mesh;
+        g_matgrad_light = (unsigned char)g_light_color;
+    }
+    cellfg_ensure(cols * rows);
     g_super = (g_mesh && g_mesh->ntri > SUPER_TRIS) ? 0 : 1;
 
     ctx.grid = grid; ctx.cols = cols; ctx.rows = rows; ctx.aspect = aspect;
@@ -1612,6 +1672,25 @@ static MeshDef *make_mesh(RawMesh *rm, const ModelMeta *meta) {
     m->owned  = 1;
     m->built  = 0;
 
+    /* per-triangle material colours from OBJ+MTL (if any) */
+    if (rm->face_rgb && m->ntri > 0) {
+        int mi, mk;
+        m->face_mat = (unsigned char *)malloc((size_t)m->ntri);
+        if (m->face_mat) {
+            for (mi = 0; mi < m->ntri; ++mi) {
+                unsigned char R = rm->face_rgb[mi * 3], G = rm->face_rgb[mi * 3 + 1], B = rm->face_rgb[mi * 3 + 2];
+                for (mk = 0; mk < m->nmat; ++mk)
+                    if (m->matpal[mk * 3] == R && m->matpal[mk * 3 + 1] == G && m->matpal[mk * 3 + 2] == B) break;
+                if (mk == m->nmat && m->nmat < MAT_MAX) {
+                    m->matpal[m->nmat * 3] = R; m->matpal[m->nmat * 3 + 1] = G; m->matpal[m->nmat * 3 + 2] = B;
+                    ++m->nmat;
+                }
+                m->face_mat[mi] = (unsigned char)(mk < MAT_MAX ? mk : 0);
+            }
+        }
+    }
+    free(rm->face_rgb); rm->face_rgb = NULL;
+
     if (m->ntri > MAX_TRIS) {           /* too detailed: keep a source and LOD it */
         int lvl = default_lod_level(m->ntri);
         RawMesh out;
@@ -1623,6 +1702,7 @@ static MeshDef *make_mesh(RawMesh *rm, const ModelMeta *meta) {
             m->verts = out.verts;     m->tris = out.tris;
             m->nvert = out.nvert;     m->ntri = out.ntri;
             m->lod_level = lvl;
+            free(m->face_mat); m->face_mat = NULL; m->nmat = 0;   /* colours lost */
             msg_setf("LOD: reduced to %d tris (PageUp/PageDown)", m->ntri);
         } else {
             m->lod_level = 0;
@@ -1774,7 +1854,7 @@ static void models_poll(int force) {
             if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
             ext = wcsrchr(fd.cFileName, L'.');
             if (!ext) continue;
-            if (_wcsicmp(ext, L".stl") && _wcsicmp(ext, L".obj") && _wcsicmp(ext, L".ply")) continue;
+            if (_wcsicmp(ext, L".stl") && _wcsicmp(ext, L".obj") && _wcsicmp(ext, L".ply") && _wcsicmp(ext, L".off")) continue;
             if (ne < (int)(sizeof(ents) / sizeof(ents[0]))) {
                 DirEnt *d = &ents[ne++];
                 _snwprintf(d->path, MAX_PATH, L"%ls\\%ls", g_models_dir, fd.cFileName);
@@ -1887,8 +1967,9 @@ static void print_help(void) {
         "                       transparent background, no HUD)\n"
         "  R                    Rescan the models/ folder\n"
         "  q                    Quit\n\n"
-        "Drop .stl/.obj/.ply files into the 'models' folder next to this\n"
-        "executable; they are detected automatically and added to the cycle.\n",
+        "Drop .stl/.obj/.ply/.off files into the 'models' folder next to this\n"
+        "executable; they are detected automatically and added to the cycle.\n"
+        "OBJ files may use an .mtl for per-material colours.\n",
         APP_NAME, APP_VERSION,
         (int)SPEED_STEP, (int)MAX_SPEED, (int)SPEED_STEP, (int)MIN_SPEED,
         (int)TILT_STEP, (int)MAX_TILT, LOD_N - 1);
@@ -2133,18 +2214,17 @@ static void export_status(HANDLE h, int is_console, int i, int n) {
 static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, int rows, int apng) {
     int NF;
     Canvas cv;
-    unsigned char grad_rgb[RAMP_N * 3];
-    unsigned char gifpal[32 * 3];
-    unsigned char apngpal[64 * 3];
-    unsigned char trns[64];
+    unsigned char gifpal[256 * 3];
+    unsigned char apngpal[512 * 3];
+    unsigned char trns[512];
     unsigned char *idx = NULL;
     char *frames = NULL;
     GifWriter *gw = NULL;
     ApngWriter *aw = NULL;
     wchar_t path[300];
     char name[80];
-    int i, r, g, b, rc = 0;
-    int used[RAMP_N], gifmap[RAMP_N], apng255[RAMP_N], apng128[RAMP_N];
+    int i, r, g, rc = 0;
+    int usedc[256], gifmap256[256], apng255c[256], apng128c[256];
     int un = 0, minc, maxc, minr, maxr, cw, ch, outW, outH;
     char *crop = NULL;
     double save_angle = g_angle;
@@ -2163,19 +2243,11 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
         if (NF < 24) NF = 24;
     }
 
-    /* colours for the 15 ramp levels (level 0 is the transparent space) */
-    for (i = 0; i < RAMP_N; ++i) {
-        palette_rgb(g_grad[i], &r, &g, &b);
-        grad_rgb[i * 3 + 0] = (unsigned char)r;
-        grad_rgb[i * 3 + 1] = (unsigned char)g;
-        grad_rgb[i * 3 + 2] = (unsigned char)b;
-    }
-
     /* ---- pass 1: render each frame once, keep it, and record used colours */
     fbytes = (size_t)cols * rows;
     frames = (char *)malloc(fbytes * NF);
     if (!frames) { msg_setf("export: out of memory"); return 0; }
-    memset(used, 0, sizeof(used));
+    memset(usedc, 0, sizeof(usedc));
     minc = cols; maxc = -1; minr = rows; maxr = -1;
     g_shattered = 0;
     for (i = 0; i < NF; ++i) {
@@ -2187,7 +2259,8 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
             for (g = 0; g < cols; ++g) {
                 int level = g_ramp_rev[(unsigned char)row[g]];
                 if (level > 0) {
-                    used[level] = 1;
+                    int c = g_cellfg ? (int)(unsigned char)g_cellfg[(size_t)r * cols + g] : g_grad[level];
+                    if (c >= 0 && c < 256) usedc[c] = 1;
                     if (g < minc) minc = g;
                     if (g > maxc) maxc = g;
                     if (r < minr) minr = r;
@@ -2207,25 +2280,24 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
     memset(gifpal, 0, sizeof(gifpal));
     memset(apngpal, 0, sizeof(apngpal));
     memset(trns, 0, sizeof(trns));
-    for (i = 0; i < RAMP_N; ++i) { gifmap[i] = 0; apng255[i] = 0; apng128[i] = 0; }
-    for (i = 1; i < RAMP_N; ++i) {
-        unsigned char R, G, B;
-        int k;
-        if (!used[i]) continue;
-        R = grad_rgb[i * 3]; G = grad_rgb[i * 3 + 1]; B = grad_rgb[i * 3 + 2];
+    for (i = 0; i < 256; ++i) { gifmap256[i] = 0; apng255c[i] = 0; apng128c[i] = 0; }
+    for (i = 0; i < 256; ++i) {
+        int rr, gg, bb, k;
+        if (!usedc[i]) continue;
+        palette_rgb(i, &rr, &gg, &bb);
         for (k = 0; k < un; ++k)
-            if (gifpal[(k + 1) * 3] == R && gifpal[(k + 1) * 3 + 1] == G && gifpal[(k + 1) * 3 + 2] == B) break;
+            if (gifpal[(k + 1) * 3] == rr && gifpal[(k + 1) * 3 + 1] == gg && gifpal[(k + 1) * 3 + 2] == bb) break;
         if (k == un) {                       /* new colour */
-            gifpal[(un + 1) * 3] = R; gifpal[(un + 1) * 3 + 1] = G; gifpal[(un + 1) * 3 + 2] = B;
-            apngpal[(1 + 2 * un) * 3] = R; apngpal[(1 + 2 * un) * 3 + 1] = G; apngpal[(1 + 2 * un) * 3 + 2] = B;
-            apngpal[(2 + 2 * un) * 3] = R; apngpal[(2 + 2 * un) * 3 + 1] = G; apngpal[(2 + 2 * un) * 3 + 2] = B;
+            gifpal[(un + 1) * 3] = (unsigned char)rr; gifpal[(un + 1) * 3 + 1] = (unsigned char)gg; gifpal[(un + 1) * 3 + 2] = (unsigned char)bb;
+            apngpal[(1 + 2 * un) * 3] = (unsigned char)rr; apngpal[(1 + 2 * un) * 3 + 1] = (unsigned char)gg; apngpal[(1 + 2 * un) * 3 + 2] = (unsigned char)bb;
+            apngpal[(2 + 2 * un) * 3] = (unsigned char)rr; apngpal[(2 + 2 * un) * 3 + 1] = (unsigned char)gg; apngpal[(2 + 2 * un) * 3 + 2] = (unsigned char)bb;
             trns[1 + 2 * un] = 255;
             trns[2 + 2 * un] = 128;
             ++un;
         }
-        gifmap[i]  = k + 1;
-        apng255[i] = 1 + 2 * k;
-        apng128[i] = 2 + 2 * k;
+        gifmap256[i] = k + 1;
+        apng255c[i] = 1 + 2 * k;
+        apng128c[i] = 2 + 2 * k;
     }
 
     /* file name from the shape name (sanitised) */
@@ -2277,17 +2349,21 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
             int oy;
             for (oy = 0; oy < outH; ++oy) {
                 int sy = (int)((long)oy * cv.h / outH);
-                const char *crow = crop + (size_t)(sy / cv.cellH) * cw;
+                int scy = sy / cv.cellH;
+                const char *crow = crop + (size_t)scy * cw;
+                const short *fgrow = g_cellfg ? g_cellfg + (size_t)(minr + scy) * cols + minc : NULL;
                 int ox;
                 for (ox = 0; ox < outW; ++ox) {
                     int sx = (int)((long)ox * cv.w / outW);
-                    int level = g_ramp_rev[(unsigned char)crow[sx / cv.cellW]];
+                    int scx = sx / cv.cellW;
+                    int level = g_ramp_rev[(unsigned char)crow[scx]];
+                    int col = fgrow ? (int)(unsigned char)fgrow[scx] : 0;
                     unsigned m = cv.bits[((size_t)sy * cv.w + sx) * 4 + 2];
                     size_t pi = (size_t)oy * outW + ox;
                     if (level < 0) level = 0;
                     if (level <= 0 || m < 64) idx[pi] = 0;
-                    else if (apng) idx[pi] = (unsigned char)(m >= 192 ? apng255[level] : apng128[level]);
-                    else           idx[pi] = (m >= 128) ? (unsigned char)gifmap[level] : 0;
+                    else if (apng) idx[pi] = (unsigned char)(m >= 192 ? apng255c[col] : apng128c[col]);
+                    else           idx[pi] = (m >= 128) ? (unsigned char)gifmap256[col] : 0;
                 }
             }
         }
@@ -2616,6 +2692,7 @@ int main(int argc, char **argv) {
                     int want;
                     if (g_cc && g_cc[idx] >= 0) want = g_cc[idx];
                     else if (is_ui_cell(r, c))  want = -1;
+                    else if (g_cellfg)          want = g_cellfg[idx];
                     else {
                         int ri = g_ramp_rev[(unsigned char)grid[idx]];
                         want = (ri >= 0) ? g_grad[ri] : g_fg_color;

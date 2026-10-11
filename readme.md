@@ -31,9 +31,10 @@ Prebuilt Windows x64 binaries are on the
   embedded, ray-traced triangle meshes — see *Third-party assets*).
 - **Cycle at runtime.** The shapes are kept in a list in insertion order;
   press `SPACE` to switch to the next one without restarting.
-- **Bring your own models.** Drop `.stl`, `.obj` or `.ply` files into a
+- **Bring your own models.** Drop `.stl`, `.obj`, `.ply` or `.off` files into a
   `models/` folder next to the executable; they are detected automatically
-  (live) and added to the `SPACE` cycle. Meshes with too many triangles are
+  (live) and added to the `SPACE` cycle. OBJ files may reference an `.mtl` for
+  per-material colours. Meshes with too many triangles are
   reduced with a shape-preserving LOD instead of being rejected. An optional
   `<name>.json` sidecar can set the up axis, rotation, zoom and display name.
 - **Model list.** Press `Tab` for a scrollable list of every available
@@ -316,7 +317,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.17**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.18**. See [changelog.md](changelog.md) for details.
 
 ## Roadmap
 
