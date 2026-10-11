@@ -4,6 +4,16 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.15] - 2026-10-11
+
+### Changed
+- Animation export: the frame count is now capped at **360** (one frame per
+  degree) while keeping ~30 fps, so the files no longer grow without bound at
+  slow spin speeds.
+- The 1280 px limit on the longest image side is now **guaranteed**: after the
+  cell size is chosen, a final downscale clamps the image so it can never exceed
+  1280 px (previously very wide crops could overshoot).
+
 ## [0.2.14] - 2026-10-11
 
 ### Changed

@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.14
+ * 3D ASCII Rotator - version 0.2.15
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -48,7 +48,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.14"
+#define APP_VERSION "0.2.15"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -2134,7 +2134,7 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
     char name[80];
     int i, r, g, b, rc = 0;
     int used[RAMP_N], gifmap[RAMP_N], apng255[RAMP_N], apng128[RAMP_N];
-    int un = 0, minc, maxc, minr, maxr, cw, ch;
+    int un = 0, minc, maxc, minr, maxr, cw, ch, outW, outH;
     char *crop = NULL;
     double save_angle = g_angle;
     int save_shat = g_shattered;
@@ -2143,14 +2143,13 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
 
     if (cols <= 0 || rows <= 0) return 0;
 
-    /* Adaptive frame time: at least ~30 fps, and a full turn (whose length
-     * follows the spin speed, 360/speed seconds) captured smoothly. */
+    /* Adaptive frame count: 30 fps, and at most one frame per degree (360). */
     {
         double sp = g_speed > 0.1 ? g_speed : 15.0;
         double dur = 360.0 / sp;
-        NF = (int)(dur / 0.03 + 0.5);        /* ~33 fps (>= 30) */
+        NF = (int)(dur * 30.0 + 0.5);        /* 30 fps over a full turn */
+        if (NF > 360) NF = 360;              /* at most one frame per degree */
         if (NF < 24) NF = 24;
-        if (NF > 3600) NF = 3600;
     }
 
     /* colours for the 15 ramp levels (level 0 is the transparent space) */
@@ -2233,23 +2232,28 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
     crop = (char *)malloc(cbytes);
     if (!crop) { free(frames); msg_setf("export: out of memory"); return 0; }
     if (!canvas_begin(&cv, cw, ch, EXPORT_MAXDIM)) { free(crop); free(frames); msg_setf("export: cannot create canvas"); return 0; }
-    npix = (size_t)cv.w * cv.h;
+    /* Hard guarantee: the longest side never exceeds EXPORT_MAXDIM pixels. */
+    outW = cv.w; outH = cv.h;
+    if (outW > EXPORT_MAXDIM || outH > EXPORT_MAXDIM) {
+        double sc = (double)EXPORT_MAXDIM / (double)(outW > outH ? outW : outH);
+        outW = (int)(outW * sc + 0.5); if (outW < 1) outW = 1;
+        outH = (int)(outH * sc + 0.5); if (outH < 1) outH = 1;
+    }
+    npix = (size_t)outW * outH;
     idx = (unsigned char *)malloc(npix);
     if (!idx) { free(crop); free(frames); canvas_end(&cv); msg_setf("export: out of memory"); return 0; }
 
-    /* frame time so the animation plays at >= 30 fps while a full turn lasts
-     * 360/speed seconds (adaptive frame count) */
+    /* keep 30 fps (the frame count above bounds the duration at 360 frames) */
     {
-        double sp = g_speed > 0.1 ? g_speed : 15.0;
-        double dt = (360.0 / sp) / (double)NF;   /* seconds per frame */
+        double dt = 1.0 / 30.0;                  /* seconds per frame */
         delay_cs = (int)(dt * 100.0 + 0.5);  if (delay_cs < 1) delay_cs = 1;
         delay_num = (int)(dt * 10000.0 + 0.5);
         delay_den = 10000;
         if (delay_num < 1) delay_num = 1;
     }
 
-    if (apng) aw = apng_begin(path, cv.w, cv.h, NF, apngpal, trns, 1 + 2 * un);
-    else      gw = gif_begin(path, cv.w, cv.h, gifpal, un + 1);
+    if (apng) aw = apng_begin(path, outW, outH, NF, apngpal, trns, 1 + 2 * un);
+    else      gw = gif_begin(path, outW, outH, gifpal, un + 1);
     if (!aw && !gw) { free(idx); free(crop); free(frames); canvas_end(&cv); msg_setf("export: cannot write file"); return 0; }
 
     g_shattered = 0;
@@ -2258,22 +2262,21 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
         for (r = 0; r < ch; ++r)
             memcpy(crop + (size_t)r * cw, fr + (size_t)(minr + r) * cols + minc, (size_t)cw);
         canvas_draw(&cv, crop, cw, ch);
-        for (r = 0; r < ch; ++r) {
-            for (g = 0; g < cw; ++g) {
-                int level = g_ramp_rev[(unsigned char)crop[(size_t)r * cw + g]];
-                int py0 = r * cv.cellH, px0 = g * cv.cellW, y, x;
-                int pal255, pal128, gpal;
-                if (level < 0) level = 0;
-                pal255 = apng255[level]; pal128 = apng128[level]; gpal = gifmap[level];
-                for (y = 0; y < cv.cellH; ++y) {
-                    size_t base = (size_t)(py0 + y) * cv.w + px0;
-                    for (x = 0; x < cv.cellW; ++x) {
-                        size_t pi = base + x;
-                        unsigned m = cv.bits[pi * 4 + 2];
-                        if (level <= 0 || m < 64) idx[pi] = 0;
-                        else if (apng) idx[pi] = (unsigned char)(m >= 192 ? pal255 : pal128);
-                        else           idx[pi] = (m >= 128) ? (unsigned char)gpal : 0;
-                    }
+        {
+            int oy;
+            for (oy = 0; oy < outH; ++oy) {
+                int sy = (int)((long)oy * cv.h / outH);
+                const char *crow = crop + (size_t)(sy / cv.cellH) * cw;
+                int ox;
+                for (ox = 0; ox < outW; ++ox) {
+                    int sx = (int)((long)ox * cv.w / outW);
+                    int level = g_ramp_rev[(unsigned char)crow[sx / cv.cellW]];
+                    unsigned m = cv.bits[((size_t)sy * cv.w + sx) * 4 + 2];
+                    size_t pi = (size_t)oy * outW + ox;
+                    if (level < 0) level = 0;
+                    if (level <= 0 || m < 64) idx[pi] = 0;
+                    else if (apng) idx[pi] = (unsigned char)(m >= 192 ? apng255[level] : apng128[level]);
+                    else           idx[pi] = (m >= 128) ? (unsigned char)gifmap[level] : 0;
                 }
             }
         }
@@ -2286,7 +2289,7 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
 
     if (apng) rc = apng_end(aw); else rc = gif_end(gw);
     {
-        int W = cv.w, H = cv.h;
+        int W = outW, H = outH;
         free(idx); free(crop); free(frames); canvas_end(&cv);
         if (rc) msg_setf("saved %ls (%dx%d, %d frames)", path, W, H, NF);
         else    msg_setf("export: write failed");

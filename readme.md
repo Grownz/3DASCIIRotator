@@ -55,9 +55,9 @@ Prebuilt Windows x64 binaries are on the
   to the characters that are actually drawn (no HUD), so its aspect follows the
   model rather than the terminal; the longest side is at most **1280 px**, and
   the palette holds **only the colours actually used** (GIF via LZW; PNG as a
-  palette image with a few alpha levels). The frame time is adapted so the
-  animation plays at **at least ~30 fps** while a full turn (whose length follows
-  the spin speed, `360/speed` seconds) is captured smoothly.
+  palette image with a few alpha levels). The frame count is at most **360**
+  (one frame per degree) at ~30 fps, and the longest image side is **always**
+  at most 1280 px (a final downscale guarantees it).
 - **FPS readout.** Press `Pos1` / `Home` to toggle a frames-per-second display
   in the bottom-left corner.
 - **Always spinning.** The solid rotates around the vertical (z) axis at
@@ -314,7 +314,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.14**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.15**. See [changelog.md](changelog.md) for details.
 
 ## Roadmap
 
