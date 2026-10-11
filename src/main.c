@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.15
+ * 3D ASCII Rotator - version 0.2.16
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -48,7 +48,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.15"
+#define APP_VERSION "0.2.16"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -105,6 +105,8 @@ static int          g_menu_start = 0;              /* --menu (snapshot preview) 
 static int          g_lod_arg = -1;                /* --lod level (snapshot) */
 static int          g_bench = 0;                   /* --bench <frames>      */
 static int          g_export_fmt = 0;              /* --export gif|png      */
+static unsigned     g_mesh_rgb = 0xFFFFFFFFu;      /* --mesh RRGGBB         */
+static unsigned     g_light_rgb = 0xFFFFFFFFu;     /* --light RRGGBB        */
 static int          g_target_fps = 60;             /* --fps (0 = unlimited) */
 
 /* --- status message (auto-hides), FPS HUD, shape colour, menu slider ----- */
@@ -1859,7 +1861,9 @@ static void print_help(void) {
         "      --lod <level>    With --snapshot: apply an LOD level (0..%d)\n"
         "      --bench <frames> Benchmark offscreen rendering and exit\n"
         "      --fps <n>        Frame-rate cap for interactive mode (default 60)\n"
-        "      --export <fmt>   Write a 360-degree animation (gif|png) and exit\n\n"
+        "      --export <fmt>   Write a 360-degree animation (gif|png) and exit\n"
+        "      --mesh <RRGGBB>  Mesh colour (hex RGB), e.g. 006400 for dark green\n"
+        "      --light <RRGGBB> Light colour (hex RGB), e.g. 90EE90 for light green\n\n"
         "Controls (interactive):\n"
         "  ESC                  Quit\n"
         "  +                    Increase spin by %d deg/s (max %d deg/s)\n"
@@ -1932,6 +1936,12 @@ static int parse_args(int argc, char **argv) {
                 else if (_stricmp(v, "png") == 0) g_export_fmt = 2;
                 else { fprintf(stderr, "error: --export expects gif or png\n"); return 0; }
             }
+        } else if (_stricmp(a, "--mesh") == 0) {
+            if (i + 1 >= argc) { fprintf(stderr, "error: --mesh requires RRGGBB\n"); return 0; }
+            g_mesh_rgb = (unsigned)strtoul(argv[++i], NULL, 16);
+        } else if (_stricmp(a, "--light") == 0) {
+            if (i + 1 >= argc) { fprintf(stderr, "error: --light requires RRGGBB\n"); return 0; }
+            g_light_rgb = (unsigned)strtoul(argv[++i], NULL, 16);
         } else if (_stricmp(a, "--fps") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "error: --fps requires a value\n");
@@ -2340,6 +2350,18 @@ int main(int argc, char **argv) {
 
     if (!parse_args(argc, argv)) return 1;
     colors_init();
+    if (g_mesh_rgb != 0xFFFFFFFFu) {
+        g_fg_color = nearest_color((int)((g_mesh_rgb >> 16) & 0xFF),
+                                   (int)((g_mesh_rgb >> 8) & 0xFF),
+                                   (int)(g_mesh_rgb & 0xFF));
+        g_color_sel = colors_index(g_fg_color);
+    }
+    if (g_light_rgb != 0xFFFFFFFFu) {
+        g_light_color = nearest_color((int)((g_light_rgb >> 16) & 0xFF),
+                                      (int)((g_light_rgb >> 8) & 0xFF),
+                                      (int)(g_light_rgb & 0xFF));
+        g_light_sel = colors_index(g_light_color);
+    }
     ramp_rev_init();
     grad_build();
 

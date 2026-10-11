@@ -4,6 +4,13 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.16] - 2026-10-11
+
+### Added
+- `--mesh <RRGGBB>` and `--light <RRGGBB>` set the mesh / light colours from the
+  command line (hex RGB, mapped to the nearest 256-colour palette entry), so the
+  animation export can be driven headlessly with chosen colours.
+
 ## [0.2.15] - 2026-10-11
 
 ### Changed

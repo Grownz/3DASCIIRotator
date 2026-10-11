@@ -125,6 +125,8 @@ build\ascii3D.exe -s cube
 | `--bench <frames>` | Benchmark offscreen rendering (`ms/frame`, `fps`) and exit. |
 | `--fps <n>` | Interactive frame-rate cap (`1`..`240`, default `60`; `0` = uncapped). |
 | `--export <fmt>` | Write a full 360-degree animation (`gif` or `png`) and exit. |
+| `--mesh <RRGGBB>` | Mesh colour as hex RGB (e.g. `006400` dark green). |
+| `--light <RRGGBB>` | Light colour as hex RGB (e.g. `90EE90` light green). |
 
 ### Examples
 
@@ -314,7 +316,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.15**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.16**. See [changelog.md](changelog.md) for details.
 
 ## Roadmap
 
