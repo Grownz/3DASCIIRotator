@@ -302,6 +302,9 @@ static int parse_obj(unsigned char *b, size_t n, int max_tris, const wchar_t *pa
                 if (!*t) break;
                 vi = strtol(t, &end, 10);
                 if (end == t) { ++t; continue; }
+                /* Ignore any texture/normal suffix ("v", "v/vt", "v//vn",
+                 * "v/vt/vn"): only the leading vertex index counts. */
+                while (*end && *end != ' ' && *end != '\t' && *end != '\r') ++end;
                 if (vi > 0) vi = vi - 1;
                 else if (vi < 0) vi = nv + vi;
                 else { t = end; continue; }

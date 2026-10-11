@@ -4,6 +4,19 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.20] - 2026-10-11
+
+### Added
+- **OBJ** faces are read in every index form — `v`, `v/vt`, `v//vn` and
+  `v/vt/vn` — so files that carry texture or normal indices load as intended.
+
+### Changed
+- Meshes now use the same **adaptive 2×2 supersampling** as the analytic
+  shapes (only cells next to a luminance edge are sampled four times), which
+  raises the frame rate for detailed models.
+- The shading hot path expresses the Blinn-Phong highlight and the fresnel rim
+  with plain multiplications instead of `pow()`.
+
 ## [0.2.19] - 2026-10-11
 
 ### Added

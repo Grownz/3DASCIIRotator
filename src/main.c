@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.19
+ * 3D ASCII Rotator - version 0.2.20
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -49,7 +49,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.19"
+#define APP_VERSION "0.2.20"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -71,7 +71,8 @@
 #define MAX_TRIS     500000  /* soft cap for loaded models          */
 #define MAX_LOAD_TRIS 5000000 /* hard reader cap before LOD          */
 #define SUPER_TRIS   100000  /* above this, single sample per cell  */
-#define SUPER_TH       0.03  /* edge threshold for adaptive 2x2     */
+#define SUPER_TH       0.03  /* edge threshold for adaptive 2x2 (smooth SDFs) */
+#define SUPER_TH_MESH  0.20  /* ditto for flat-shaded meshes (fewer edges)   */
 #define MAX_MODELS   32      /* max user models kept                */
 #define BVH_CACHE     3      /* BVHs kept alive (LRU)               */
 #define MAT_MAX     128      /* max distinct OBJ+MTL material colours */
@@ -936,8 +937,15 @@ static double light_surface(v3 n, v3 view, double ao) {
     if (ndv < 0.0) ndv = 0.0;
 
     amb  = 0.10 + 0.10 * (0.5 + 0.5 * n.z);   /* sky above, ground below */
-    spec = 0.70 * pow(ndh, 60.0);             /* tight Blinn-Phong highlight */
-    rim  = 0.22 * pow(1.0 - ndv, 3.0);        /* fresnel edge light */
+    {
+        /* spec = 0.70*ndh^60, rim = 0.22*(1-ndv)^3 -- replace pow() in the
+         * per-hit hot path with a few multiplications. */
+        double h2 = ndh * ndh, h4 = h2 * h2, h8 = h4 * h4;
+        double h16 = h8 * h8, h32 = h16 * h16;
+        double t = 1.0 - ndv;
+        spec = 0.70 * (h32 * h16 * h8 * h4);  /* ndh^60 */
+        rim  = 0.22 * (t * t * t);            /* (1-ndv)^3 */
+    }
     lum  = (amb + 0.85 * ndl + spec + rim) * ao;
     if (lum < 0.0) lum = 0.0;
     if (lum > 1.0) lum = 1.0;
@@ -1101,7 +1109,7 @@ typedef struct {
     char  *grid;
     int    cols, rows;
     double aspect;
-    int    pass;   /* 0 = 1x, 3 = fixed 2x2 (mesh), 1/2 = adaptive passes */
+    int    pass;   /* 0 = 1x, 1/2 = adaptive 2x2 passes */
 } RenderCtx;
 
 static void render_rows(int r0, int r1, void *vctx) {
@@ -1114,23 +1122,25 @@ static void render_rows(int r0, int r1, void *vctx) {
             size_t idx = (size_t)r * c->cols + cc;
             double L;
             int mat = -1;
+            int upd = 1;
             if (c->pass == 0) {
                 L = shade_ray(hx, vz, &mat);
-            } else if (c->pass == 3) {
-                L = shade_cell(hx, vz, c->cols, c->rows, &mat);
             } else if (c->pass == 1) {
                 L = shade_ray(hx, vz, &mat);
                 if (g_lum) g_lum[idx] = L;
             } else {                                     /* pass 2: adaptive edges */
+                double th = g_mesh ? SUPER_TH_MESH : SUPER_TH;
                 L = g_lum[idx];
-                if ((cc > 0               && fabs(L - g_lum[idx - 1]) > SUPER_TH) ||
-                    (cc < c->cols - 1     && fabs(L - g_lum[idx + 1]) > SUPER_TH) ||
-                    (r > 0                && fabs(L - g_lum[idx - c->cols]) > SUPER_TH) ||
-                    (r < c->rows - 1      && fabs(L - g_lum[idx + c->cols]) > SUPER_TH))
+                if ((cc > 0               && fabs(L - g_lum[idx - 1]) > th) ||
+                    (cc < c->cols - 1     && fabs(L - g_lum[idx + 1]) > th) ||
+                    (r > 0                && fabs(L - g_lum[idx - c->cols]) > th) ||
+                    (r < c->rows - 1      && fabs(L - g_lum[idx + c->cols]) > th))
                     L = shade_cell(hx, vz, c->cols, c->rows, &mat);
+                else
+                    upd = 0;                             /* keep the pass-1 colour */
             }
             c->grid[idx] = lum_char(L);
-            if (g_cellfg) g_cellfg[idx] = (short)cell_colour(g_ramp_rev[(unsigned char)c->grid[idx]], mat);
+            if (g_cellfg && upd) g_cellfg[idx] = (short)cell_colour(g_ramp_rev[(unsigned char)c->grid[idx]], mat);
         }
     }
 }
@@ -1174,11 +1184,6 @@ static void render_grid(char *grid, int cols, int rows) {
         pool_run(render_rows, &ctx, rows);
         return;
     }
-    if (g_mesh) {                         /* small mesh: fixed 2x2 */
-        ctx.pass = 3;
-        pool_run(render_rows, &ctx, rows);
-        return;
-    }
 
     lum_ensure(cols * rows);
     if (!g_lum) {                         /* allocation failed: plain 1x */
@@ -1187,7 +1192,7 @@ static void render_grid(char *grid, int cols, int rows) {
         return;
     }
 
-    /* analytic SDF: adaptive 2x2 (pass 1 = 1 sample, pass 2 = edges only) */
+    /* adaptive 2x2: pass 1 = 1 sample, pass 2 = edges only (meshes + SDFs) */
     ctx.pass = 1;
     pool_run(render_rows, &ctx, rows);
     ctx.pass = 2;

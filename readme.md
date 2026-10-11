@@ -23,8 +23,8 @@ Prebuilt Windows x64 binaries are on the
 - **High-quality shading.** Each character cell gets a surface normal and is
   lit with Blinn-Phong diffuse + specular highlights, a hemispheric ambient
   term, a fresnel rim light and distance-field ambient occlusion. Luminance is
-  mapped onto a 15-level ASCII density ramp and every cell is supersampled 2x2
-  for smooth edges.
+  mapped onto a 15-level ASCII density ramp and cells next to a luminance edge
+  are supersampled 2x2 for smooth edges.
 - **Twelve shapes.** Cube, cylinder, diamond (octahedron), sphere, a
   stegosaurus, a Formula-style race car, a companion cube, "Die Maus", a trout,
   a kebab, the Brandenburg Gate and a "Tank Man" scene (the latter eight are
@@ -78,8 +78,8 @@ Prebuilt Windows x64 binaries are on the
 - **Fast.** Rendering is multi-threaded across all cores (via a lightweight
   blocking worker pool — no OpenMP runtime and no busy-waiting, so idle CPU use
   is minimal), the object/camera transform is hoisted out of the per-ray code,
-  meshes use a cache-friendly BVH with a packed triangle layout, and analytic
-  shapes use adaptive supersampling. The interactive loop is capped to a
+  meshes use a cache-friendly BVH with a packed triangle layout, and all shapes
+  use adaptive supersampling. The interactive loop is capped to a
   target frame rate (default `60`, `--fps`), and `--bench <frames>` reports
   `ms/frame` and `fps`.
 
@@ -222,7 +222,7 @@ the point is shaded with:
 5. distance-field **ambient occlusion** for contact shading.
 
 The resulting luminance drives the 15-level ASCII ramp `" .,:;~-=+*oO#%@"`,
-and each cell is sampled 2x2 to smooth the edges. The object is rotated about
+and cells on a luminance edge are sampled 2x2 to smooth the edges. The object is rotated about
 the vertical `z` axis by integrating the current spin speed over real elapsed
 time, so the motion speed is independent of the frame rate. The `Up` / `Down`
 keys tilt that axis about the horizontal `x` axis.
