@@ -264,6 +264,7 @@ settles into a shallow debris layer on the floor the object was resting on.
   docs/companion.gif    preview animation (generated)
   docs/moses.gif        preview animation (generated)
   docs/models-feature.md  design notes for user models
+  docs/ui-improvements.md UI backlog (ideas, not yet implemented)
   tools/make_stego_model.py    regenerates src/stego_model.h
   tools/make_shape_models.py   regenerates the other model headers
   tools/make_preview_gif.py    regenerates the preview GIFs (docs/*.gif)
@@ -331,7 +332,8 @@ changes, and a closing `Requirements:` line.
 
 ## Roadmap
 
-- Later: more formats, model thumbnails, per-model sidecar presets.
+- UI ideas under consideration: [docs/ui-improvements.md](docs/ui-improvements.md).
+- Model thumbnails, per-model sidecar presets.
 
 ## License
 
