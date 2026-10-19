@@ -4,6 +4,13 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.22] - 2026-10-12
+
+### Changed
+- The webcam view follows console resizes at runtime: the frame is re-fitted to
+  the new grid, and the colour-output buffer is dimensioned for a colour escape
+  in every cell, so large or colourful frames stay stable.
+
 ## [0.2.21] - 2026-10-12
 
 ### Added

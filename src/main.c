@@ -1,5 +1,5 @@
-/* ============================================================================
- * 3D ASCII Rotator - version 0.2.21
+﻿/* ============================================================================
+ * 3D ASCII Rotator - version 0.2.22
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -50,7 +50,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.21"
+#define APP_VERSION "0.2.22"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -2805,7 +2805,9 @@ int main(int argc, char **argv) {
                 grid = (char *)malloc((size_t)cols * rows);
                 if (!grid) break;
                 free(out);
-                out = (char *)malloc((size_t)cols * rows * 6 + (size_t)rows * 4 + 256);
+                /* Worst case per cell: a colour escape (11 bytes) + the glyph,
+                 * plus a per-row reset and CRLF. */
+                out = (char *)malloc((size_t)cols * rows * 12 + (size_t)rows * 8 + 64);
                 if (!out) break;
                 cc_ensure(cols * rows);
                 g_scale_mesh = NULL;   /* console changed: re-fit the model */

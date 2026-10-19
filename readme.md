@@ -65,7 +65,8 @@ Prebuilt Windows x64 binaries are on the
   in the bottom-left corner.
 - **Webcam mode.** `--webcam` renders the live camera picture as coloured ASCII
   (luminance picks the character, the cell colour comes from the 256-colour
-  palette). `--cam <n>` selects a device, `--list-cams` lists them, and
+  palette) and re-fits it when the console is resized. `--cam <n>` selects a
+  device, `--list-cams` lists them, and
   `--webcam --snapshot` prints a single frame. Media Foundation is loaded on
   demand, so the executable still imports only the four system DLLs.
 - **Always spinning.** The solid rotates around the vertical (z) axis at
@@ -340,7 +341,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.21**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.22**. See [changelog.md](changelog.md) for details.
 
 Each entry on the [releases page](https://github.com/Grownz/3DASCIIRotator/releases)
 uses the same note format: a one-line summary, a short labelled list of the
