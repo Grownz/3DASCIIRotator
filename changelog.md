@@ -4,6 +4,16 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.21] - 2026-10-12
+
+### Added
+- **Webcam mode** (`--webcam`): the live camera picture is drawn as coloured
+  ASCII — luminance selects the character and each cell takes its nearest
+  256-colour palette entry. `--cam <n>` picks the device, `--list-cams` lists
+  them, and `--webcam --snapshot` prints a single frame.
+- The capture uses Media Foundation, resolved on demand, so the executable's
+  import table stays at `KERNEL32`/`WINMM`/`GDI32`/`USER32`.
+
 ## [0.2.20] - 2026-10-11
 
 ### Added

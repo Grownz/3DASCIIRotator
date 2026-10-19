@@ -1,5 +1,5 @@
 /* ============================================================================
- * 3D ASCII Rotator - version 0.2.20
+ * 3D ASCII Rotator - version 0.2.21
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -36,6 +36,7 @@
 #include "loader.h"
 #include "simplify.h"
 #include "export.h"
+#include "webcam.h"
 
 #include "stego_model.h"
 #include "f1_model.h"
@@ -49,7 +50,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.20"
+#define APP_VERSION "0.2.21"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -91,6 +92,9 @@ static double       g_speed       = DEFAULT_SPEED; /* deg/s */
 static double       g_angle       = 0.0;           /* radians */
 static double       g_tilt        = 0.0;           /* degrees, + = axis tips away */
 static int          g_snapshot    = 0;
+static int          g_webcam      = 0;             /* --webcam              */
+static int          g_cam_index   = 0;             /* --cam <n>             */
+static int          g_list_cams   = 0;             /* --list-cams           */
 static double       g_start_angle = 0.0;           /* degrees */
 static double       g_start_tilt  = 0.0;           /* degrees */
 static int          g_shatter     = 0;             /* --shatter (snapshot) */
@@ -197,6 +201,35 @@ static int nearest_color(int r, int g, int b) {
         if (d < bd) { bd = d; best = COLORS[i]; }
     }
     return best;
+}
+
+/* O(1) xterm-256 quantiser for the webcam colour (the palette is the standard
+ * 6x6x6 cube plus the grey ramp). */
+static int nearest_level(int v) {
+    static const int lv[6] = { 0, 95, 135, 175, 215, 255 };
+    int i, best = 0;
+    long bd = 0x7fffffffL;
+    for (i = 0; i < 6; ++i) {
+        long d = (long)(lv[i] - v) * (lv[i] - v);
+        if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+}
+
+static int xterm_index(int r, int g, int b) {
+    static const int lv[6] = { 0, 95, 135, 175, 215, 255 };
+    int ri = nearest_level(r), gi = nearest_level(g), bi = nearest_level(b);
+    int cr = lv[ri], cg = lv[gi], cb = lv[bi];
+    int cube = 16 + 36 * ri + 6 * gi + bi;
+    long cd = (long)(cr - r) * (cr - r) + (long)(cg - g) * (cg - g) + (long)(cb - b) * (cb - b);
+    int grey = (r + g + b) / 3;
+    int gidx = (grey - 8 + 5) / 10;
+    int gv, gd;
+    if (gidx < 0) gidx = 0;
+    if (gidx > 23) gidx = 23;
+    gv = 8 + gidx * 10;
+    gd = 3L * (long)(gv - grey) * (gv - grey);
+    return (gd < cd) ? (232 + gidx) : cube;
 }
 
 /* Rebuild the per-ramp-level colour table for the current mesh/light colours. */
@@ -1199,11 +1232,69 @@ static void render_grid(char *grid, int cols, int rows) {
     pool_run(render_rows, &ctx, rows);
 }
 
+/* Map the latest webcam frame (cover-fit, mirrored) onto the character grid. */
+static void webcam_draw(char *grid, int cols, int rows) {
+    int w = 0, h = 0;
+    const unsigned char *rgb = webcam_lock(&w, &h);
+    int r, c;
+    if (!rgb) {
+        memset(grid, ' ', (size_t)cols * (size_t)rows);
+        if (g_cellfg) {
+            int i;
+            for (i = 0; i < cols * rows; ++i) g_cellfg[i] = (short)g_fg_color;
+        }
+        return;
+    }
+    {
+        double disp_aspect = (double)cols / (2.0 * (double)rows);  /* CHAR_ASPECT 0.5 */
+        double img_aspect  = (double)w / (double)h;
+        double cw = (double)w, ch = (double)h, ox = 0.0, oy = 0.0;
+        if (img_aspect > disp_aspect) { cw = (double)h * disp_aspect; ox = ((double)w - cw) * 0.5; }
+        else                          { ch = (double)w / disp_aspect; oy = ((double)h - ch) * 0.5; }
+        for (r = 0; r < rows; ++r) {
+            int y0 = (int)(oy + ch * (double)r / (double)rows);
+            int y1 = (int)(oy + ch * (double)(r + 1) / (double)rows);
+            if (y1 <= y0) y1 = y0 + 1;
+            if (y1 > h) y1 = h;
+            for (c = 0; c < cols; ++c) {
+                size_t idx = (size_t)r * (size_t)cols + (size_t)c;
+                int x0 = (int)(ox + cw * (double)c / (double)cols);
+                int x1 = (int)(ox + cw * (double)(c + 1) / (double)cols);
+                int xstep, ystep, sx, sy, cnt = 0;
+                long sr = 0, sg = 0, sb = 0;
+                if (x1 <= x0) x1 = x0 + 1;
+                if (x1 > w) x1 = w;
+                xstep = (x1 - x0 + 7) / 8; if (xstep < 1) xstep = 1;
+                ystep = (y1 - y0 + 7) / 8; if (ystep < 1) ystep = 1;
+                for (sy = y0; sy < y1; sy += ystep) {
+                    const unsigned char *row = rgb + (size_t)sy * (size_t)w * 3;
+                    for (sx = x0; sx < x1; sx += xstep) {
+                        int px = w - 1 - sx;             /* mirror */
+                        const unsigned char *p = row + (size_t)px * 3;
+                        sr += p[0]; sg += p[1]; sb += p[2]; ++cnt;
+                    }
+                }
+                if (cnt > 0) { sr /= cnt; sg /= cnt; sb /= cnt; }
+                {
+                    int lum = (int)((299 * sr + 587 * sg + 114 * sb) / 1000);
+                    grid[idx] = lum_char((double)lum / 255.0);
+                    if (g_cellfg) g_cellfg[idx] = (short)xterm_index((int)sr, (int)sg, (int)sb);
+                }
+            }
+        }
+    }
+    webcam_unlock();
+}
+
 /* Overlay the status line in the top-left corner. */
 static void draw_hud(char *grid, int cols, int rows) {
     char hud[300];
     int n, i;
-    if (g_shattered) {
+    if (g_webcam) {
+        _snprintf(hud, sizeof(hud),
+                  " %s v%s  |  webcam: %s  |  [ESC] quit  [POS1] fps ",
+                  APP_NAME, APP_VERSION, webcam_device_name());
+    } else if (g_shattered) {
         _snprintf(hud, sizeof(hud),
                   " %s v%s  |  shape: %s  |  tilt: %d deg   "
                   "[ESC] quit   [ENTER] rebuild   [SPACE] next shape ",
@@ -1951,7 +2042,10 @@ static void print_help(void) {
         "      --fps <n>        Frame-rate cap for interactive mode (default 60)\n"
         "      --export <fmt>   Write a 360-degree animation (gif|png) and exit\n"
         "      --mesh <RRGGBB>  Mesh colour (hex RGB), e.g. 006400 for dark green\n"
-        "      --light <RRGGBB> Light colour (hex RGB), e.g. 90EE90 for light green\n\n"
+        "      --light <RRGGBB> Light colour (hex RGB), e.g. 90EE90 for light green\n"
+        "      --webcam         Show the webcam as live ASCII (ESC quits)\n"
+        "      --cam <n>        Camera index for --webcam (see --list-cams)\n"
+        "      --list-cams      List the available cameras and exit\n\n"
         "Controls (interactive):\n"
         "  ESC                  Quit\n"
         "  +                    Increase spin by %d deg/s (max %d deg/s)\n"
@@ -2001,6 +2095,16 @@ static int parse_args(int argc, char **argv) {
             exit(0);
         } else if (_stricmp(a, "--snapshot") == 0) {
             g_snapshot = 1;
+        } else if (_stricmp(a, "--webcam") == 0) {
+            g_webcam = 1;
+        } else if (_stricmp(a, "--cam") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "error: --cam requires a value\n");
+                return 0;
+            }
+            g_cam_index = atoi(argv[++i]);
+        } else if (_stricmp(a, "--list-cams") == 0) {
+            g_list_cams = 1;
         } else if (_stricmp(a, "--menu") == 0) {
             g_menu_start = 1;
         } else if (_stricmp(a, "--lod") == 0) {
@@ -2434,7 +2538,24 @@ int main(int argc, char **argv) {
     double scan_acc = 0.0;
 
     if (!parse_args(argc, argv)) return 1;
+
+    if (g_list_cams) {
+        char names[WEBCAM_MAX_DEV][128];
+        char err[160];
+        int n = webcam_list(names, WEBCAM_MAX_DEV, err, sizeof(err));
+        int i;
+        if (n < 0) { fprintf(stderr, "error: %s\n", err); return 1; }
+        if (n == 0) { fprintf(stderr, "no cameras found\n"); return 0; }
+        for (i = 0; i < n; ++i) printf("%d: %s\n", i, names[i]);
+        webcam_global_shutdown();
+        return 0;
+    }
+
     colors_init();
+    if (g_webcam && g_export_fmt) {
+        fprintf(stderr, "error: --export is not available with --webcam\n");
+        return 1;
+    }
     if (g_mesh_rgb != 0xFFFFFFFFu) {
         g_fg_color = nearest_color((int)((g_mesh_rgb >> 16) & 0xFF),
                                    (int)((g_mesh_rgb >> 8) & 0xFF),
@@ -2469,6 +2590,36 @@ int main(int argc, char **argv) {
 
     h_out = GetStdHandle(STD_OUTPUT_HANDLE);
     is_console = GetConsoleMode(h_out, &orig_mode) ? 1 : 0;
+
+    /* ---- webcam snapshot: one frame to stdout --------------------------- */
+    if (g_webcam && g_snapshot) {
+        char err[160];
+        int r;
+        cols = 100; rows = 40;
+        if (is_console) console_size(h_out, &cols, &rows);
+        if (!webcam_start(g_cam_index, err, sizeof(err))) {
+            fprintf(stderr, "webcam: %s\n", err);
+            webcam_global_shutdown();
+            return 1;
+        }
+        if (!webcam_wait(3000)) {
+            fprintf(stderr, "webcam: no frame received\n");
+            webcam_stop();
+            webcam_global_shutdown();
+            return 1;
+        }
+        grid = (char *)malloc((size_t)cols * rows);
+        if (!grid) { webcam_stop(); webcam_global_shutdown(); return 1; }
+        webcam_draw(grid, cols, rows);
+        for (r = 0; r < rows; ++r) {
+            fwrite(grid + (size_t)r * cols, 1, (size_t)cols, stdout);
+            fputc('\n', stdout);
+        }
+        free(grid);
+        webcam_stop();
+        webcam_global_shutdown();
+        return 0;
+    }
 
     /* ---- headless export: --export gif|png ------------------------------- */
     if (g_export_fmt) {
@@ -2535,6 +2686,18 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    if (g_webcam) {
+        char err[160];
+        if (!webcam_start(g_cam_index, err, sizeof(err))) {
+            fprintf(stderr, "webcam: %s\n", err);
+            webcam_global_shutdown();
+            return 1;
+        }
+        webcam_wait(2000);
+        strncpy(g_shape_name_buf, "webcam", sizeof(g_shape_name_buf) - 1);
+        g_shape_name_buf[sizeof(g_shape_name_buf) - 1] = '\0';
+    }
+
     /* enable ANSI/VT escape sequences, hide cursor, use the alt screen */
     SetConsoleMode(h_out, orig_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING |
                           ENABLE_PROCESSED_OUTPUT);
@@ -2574,7 +2737,10 @@ int main(int argc, char **argv) {
                             WORD vk = r->Event.KeyEvent.wVirtualKeyCode;
                             char ch = r->Event.KeyEvent.uChar.AsciiChar;
                             DWORD cks = r->Event.KeyEvent.dwControlKeyState;
-                            if (g_menu_open) {
+                            if (g_webcam) {
+                                if (vk == VK_ESCAPE || ch == 'q' || ch == 'Q') g_running = 0;
+                                else if (vk == VK_HOME) g_show_fps = !g_show_fps;
+                            } else if (g_menu_open) {
                                 if (vk == VK_TAB) { g_menu_open = 0; select_index(g_menu_sel); }
                                 else if (vk == VK_ESCAPE) g_running = 0;
                                 else if (vk == VK_UP)   { if (g_menu_sel > 0) --g_menu_sel; else g_menu_sel = g_item_count - 1; }
@@ -2677,7 +2843,10 @@ int main(int argc, char **argv) {
 
         /* --- update + render ------------------------------------------ */
         if (g_cc) memset(g_cc, -1, sizeof(short) * (size_t)cols * rows);
-        if (!g_shattered) {
+        if (g_webcam) {
+            cellfg_ensure(cols * rows);
+            webcam_draw(grid, cols, rows);
+        } else if (!g_shattered) {
             angle_deg += g_speed * dt;
             while (angle_deg >= 360.0) angle_deg -= 360.0;
             g_angle = angle_deg * (PI / 180.0);
@@ -2687,7 +2856,7 @@ int main(int argc, char **argv) {
             shatter_draw(grid, cols, rows);
         }
         draw_hud(grid, cols, rows);
-        if (g_menu_open) draw_menu(grid, cols, rows);
+        if (g_menu_open && !g_webcam) draw_menu(grid, cols, rows);
 
         /* --- present (per-cell colour) -------------------------------- */
         {
@@ -2731,6 +2900,7 @@ int main(int argc, char **argv) {
     }
 
     /* ---- restore the console ----------------------------------------- */
+    if (g_webcam) { webcam_stop(); webcam_global_shutdown(); }
     if (g_wait_timer) CloseHandle(g_wait_timer);
     timeEndPeriod(1);
     write_all(h_out, is_console, "\x1b[0m\x1b[?25h\x1b[?1049l", -1);

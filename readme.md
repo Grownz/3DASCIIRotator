@@ -63,6 +63,11 @@ Prebuilt Windows x64 binaries are on the
   at most 1280 px (a final downscale guarantees it).
 - **FPS readout.** Press `Pos1` / `Home` to toggle a frames-per-second display
   in the bottom-left corner.
+- **Webcam mode.** `--webcam` renders the live camera picture as coloured ASCII
+  (luminance picks the character, the cell colour comes from the 256-colour
+  palette). `--cam <n>` selects a device, `--list-cams` lists them, and
+  `--webcam --snapshot` prints a single frame. Media Foundation is loaded on
+  demand, so the executable still imports only the four system DLLs.
 - **Always spinning.** The solid rotates around the vertical (z) axis at
   15 deg/s by default.
 - **Tiltable spin axis.** Press `Up` / `Down` to tip the spin axis away from or
@@ -89,6 +94,8 @@ Prebuilt Windows x64 binaries are on the
   (ANSI/VT escape sequences must be supported).
 - The prebuilt binary is compiled for **AVX2** (Haswell 2013 or newer) and
   multi-threaded; rendering uses all available cores.
+- **Webcam mode** additionally needs a camera; on Windows 10/11, allow camera
+  access for desktop apps (Settings → Privacy → Camera).
 - To build: Visual Studio 2022 or the Visual Studio Build Tools with the
   "Desktop development with C++" workload (MSVC compiler + Windows SDK). No
   other runtime is required. Regenerating the embedded models additionally
@@ -130,6 +137,9 @@ build\ascii3D.exe -s cube
 | `--export <fmt>` | Write a full 360-degree animation (`gif` or `png`) and exit. |
 | `--mesh <RRGGBB>` | Mesh colour as hex RGB (e.g. `006400` dark green). |
 | `--light <RRGGBB>` | Light colour as hex RGB (e.g. `90EE90` light green). |
+| `--webcam` | Render the live webcam picture as ASCII (`ESC` quits). |
+| `--cam <n>` | Camera index for `--webcam` (see `--list-cams`; default `0`). |
+| `--list-cams` | List the available cameras and exit. |
 
 ### Examples
 
@@ -147,6 +157,10 @@ build\ascii3D.exe -s kebab
 build\ascii3D.exe -s berlin --tilt 15
 build\ascii3D.exe -s china
 build\ascii3D.exe --snapshot -s cube > frame.txt
+build\ascii3D.exe --list-cams
+build\ascii3D.exe --webcam
+build\ascii3D.exe --webcam --cam 1
+build\ascii3D.exe --webcam --snapshot > frame.txt
 build\ascii3D.exe --snapshot -s stego --angle 90
 build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 ```
@@ -253,6 +267,8 @@ settles into a shallow debris layer on the floor the object was resting on.
   src/simplify.h        simplify interface
   src/export.c          animated GIF / APNG writers
   src/export.h          export interface
+  src/webcam.c          webcam capture (Media Foundation, loaded dynamically)
+  src/webcam.h          webcam interface
   src/stego_model.h     embedded stegosaurus mesh (generated)
   src/f1_model.h        embedded F1 car mesh (generated)
   src/companion_model.h embedded companion cube mesh (generated)
@@ -324,7 +340,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.20**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.21**. See [changelog.md](changelog.md) for details.
 
 Each entry on the [releases page](https://github.com/Grownz/3DASCIIRotator/releases)
 uses the same note format: a one-line summary, a short labelled list of the
