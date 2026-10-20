@@ -26,5 +26,7 @@ int gltf_load(const unsigned char *b, size_t n, const wchar_t *path,
               int max_tris, RawMesh *out, char *err, int errsz);
 int mf3_load(const unsigned char *b, size_t n, int max_tris,
              RawMesh *out, char *err, int errsz);
+int fbx_load(const unsigned char *b, size_t n, int max_tris,
+             RawMesh *out, char *err, int errsz);
 
 #endif /* LOADER_H */

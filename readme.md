@@ -128,6 +128,7 @@ build\ascii3D.exe -s cube
 | `-v`, `--version` | Show the version and exit. |
 | `--angle <deg>` | Initial rotation angle in degrees (default: `0`). |
 | `--tilt <deg>` | Initial spin-axis tilt in degrees, `-90`..`90` (default: `0`). |
+| `--up <axis>` | Model up axis: `z`, `y` or `x` (default: `z`; the `A` key cycles it). |
 | `--snapshot` | Render a single frame as plain text to stdout and exit. |
 | `--shatter` | With `--snapshot`: shatter the solid and simulate the fall. |
 | `--sim <sec>` | With `--shatter`: how many seconds to simulate (default: `3`). |
@@ -178,6 +179,7 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 | `Space` | Switch to the next shape; while the model list is open, load the selected model. |
 | `Tab` | Toggle the model list on the right. While open, `Up`/`Down` or the mouse wheel move the selection (wrapping around at both ends), `Enter`/`Space` load it, and closing with `Tab` loads the current selection. |
 | `Page Up` / `Page Down` | Weaker / stronger LOD for meshes that were reduced (too many triangles). |
+| `A` | Cycle the model up axis (`z` -> `y` -> `x`). |
 | `Left` / `Right` | In the open model list: move the mesh-colour slider (applied live, wraps around). |
 | `Shift`+`Left` / `Right` | In the open model list: move the light-source colour slider (wraps around). |
 | `Pos1` / `Home` | Toggle the FPS display in the bottom-left corner. |
@@ -195,7 +197,8 @@ available shape and model by name (file names without extension); pick with the
 arrow keys (or the mouse wheel) and load with `SPACE`/`ENTER`.
 
 - **Formats:** STL (binary and ASCII), OBJ (+ MTL), PLY (ASCII and binary
-  little-endian), OFF (+ COFF/NOFF), glTF 2.0 (`.gltf`/`.glb`) and 3MF.
+  little-endian), OFF (+ COFF/NOFF), glTF 2.0 (`.gltf`/`.glb`), 3MF and binary
+  FBX 7.x (ASCII FBX is not supported).
 - **Limits & LOD:** a file up to 128 MB and up to 5M triangles is read. A mesh
   with more than 500k triangles is **reduced with a shape-preserving LOD**
   (vertex-cluster decimation) instead of being rejected; `Page Up` / `Page Dn`
@@ -264,6 +267,7 @@ settles into a shallow debris layer on the floor the object was resting on.
   src/gltf.c            glTF 2.0 / GLB reader (JSON + accessors + nodes)
   src/inflate.c/.h      raw DEFLATE decompressor (for 3MF)
   src/zip3mf.c          3MF reader (OPC/ZIP package + XML model)
+  src/fbx.c             binary FBX 7.x reader (static meshes)
   src/simplify.c        vertex-cluster LOD decimation
   src/simplify.h        simplify interface
   src/export.c          animated GIF / APNG writers
@@ -341,7 +345,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.22**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.23**. See [changelog.md](changelog.md) for details.
 
 Each entry on the [releases page](https://github.com/Grownz/3DASCIIRotator/releases)
 uses the same note format: a one-line summary, a short labelled list of the

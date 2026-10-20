@@ -4,6 +4,16 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.23] - 2026-10-21
+
+### Added
+- **FBX** support (`.fbx`, binary FBX 7.x): a minimal reader for static
+  meshes. It parses the binary node/property tree, zlib-compressed arrays, the
+  geometry (`Vertices` / `PolygonVertexIndex`), model transforms and material
+  diffuse colours, and converts Y-up/X-up files to Z-up.
+- `--up <z|y|x>` sets the model up axis, and the new `A` key cycles it at
+  runtime (`z` -> `y` -> `x`) without rebuilding the mesh.
+
 ## [0.2.22] - 2026-10-12
 
 ### Changed

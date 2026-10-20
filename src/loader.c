@@ -514,6 +514,7 @@ int loader_load(const wchar_t *path, int max_tris, RawMesh *out, char *err, int 
     else if (_wcsicmp(ext, L".gltf") == 0) ok = gltf_load(b, n, path, max_tris, out, err, errsz);
     else if (_wcsicmp(ext, L".glb") == 0)  ok = gltf_load(b, n, path, max_tris, out, err, errsz);
     else if (_wcsicmp(ext, L".3mf") == 0)  ok = mf3_load(b, n, max_tris, out, err, errsz);
+    else if (_wcsicmp(ext, L".fbx") == 0)  ok = fbx_load(b, n, max_tris, out, err, errsz);
     else seterr(err, errsz, "unsupported format");
 
     free(b);

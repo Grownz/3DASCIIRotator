@@ -1,5 +1,5 @@
 ﻿/* ============================================================================
- * 3D ASCII Rotator - version 0.2.22
+ * 3D ASCII Rotator - version 0.2.23
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -50,7 +50,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.22"
+#define APP_VERSION "0.2.23"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -115,6 +115,7 @@ static int          g_export_fmt = 0;              /* --export gif|png      */
 static unsigned     g_mesh_rgb = 0xFFFFFFFFu;      /* --mesh RRGGBB         */
 static unsigned     g_light_rgb = 0xFFFFFFFFu;     /* --light RRGGBB        */
 static int          g_target_fps = 60;             /* --fps (0 = unlimited) */
+static int          g_up_arg = -1;                 /* --up z|y|x           */
 
 /* --- status message (auto-hides), FPS HUD, shape colour, menu slider ----- */
 static int    g_show_fps = 0;
@@ -330,15 +331,41 @@ static void update_transform(void) {
     g_ct = cos(t);       g_st = sin(t);
 }
 
-/* Map a world point into the object's own frame (undo spin, then tilt). */
-static v3 to_object(v3 p) {
-    double qx = p.x, qy = p.y * g_ct - p.z * g_st, qz = p.y * g_st + p.z * g_ct;
-    return v3_make(qx * g_ca + qy * g_sa, -qx * g_sa + qy * g_ca, qz);
+/* Runtime up-axis cycle (z -> y -> x). The model is rotated into the Z-up
+ * object frame at render time, so switching it needs no rebuild and also works
+ * for the built-in meshes. */
+static int    g_up_axis = 0;          /* 0 = z-up, 1 = y-up, 2 = x-up */
+static double g_mrot[9]     = { 1,0,0, 0,1,0, 0,0,1 };
+static double g_mrot_inv[9] = { 1,0,0, 0,1,0, 0,0,1 };
+
+static void model_rot_update(void) {
+    static const double rz[9] = { 1,0,0, 0,1,0, 0,0,1 };
+    static const double ry[9] = { 1,0,0, 0,0,-1, 0,1,0 };   /* rot_x(+90) */
+    static const double rx[9] = { 0,0,-1, 0,1,0, 1,0,0 };   /* rot_y(-90) */
+    const double *src = (g_up_axis == 1) ? ry : (g_up_axis == 2) ? rx : rz;
+    memcpy(g_mrot, src, sizeof(g_mrot));
+    g_mrot_inv[0] = g_mrot[0]; g_mrot_inv[1] = g_mrot[3]; g_mrot_inv[2] = g_mrot[6];
+    g_mrot_inv[3] = g_mrot[1]; g_mrot_inv[4] = g_mrot[4]; g_mrot_inv[5] = g_mrot[7];
+    g_mrot_inv[6] = g_mrot[2]; g_mrot_inv[7] = g_mrot[5]; g_mrot_inv[8] = g_mrot[8];
 }
 
-/* Map a direction from object space back to world space. */
+/* Map a world point into the object's own (Z-up) frame: undo spin, then tilt,
+ * then undo the runtime axis rotation. */
+static v3 to_object(v3 p) {
+    double qx = p.x, qy = p.y * g_ct - p.z * g_st, qz = p.y * g_st + p.z * g_ct;
+    double ox = qx * g_ca + qy * g_sa, oy = -qx * g_sa + qy * g_ca, oz = qz;
+    return v3_make(
+        g_mrot_inv[0] * ox + g_mrot_inv[1] * oy + g_mrot_inv[2] * oz,
+        g_mrot_inv[3] * ox + g_mrot_inv[4] * oy + g_mrot_inv[5] * oz,
+        g_mrot_inv[6] * ox + g_mrot_inv[7] * oy + g_mrot_inv[8] * oz);
+}
+
+/* Map a direction from object space back to world space (model rotation first). */
 static v3 from_object(v3 n) {
-    double qx = n.x * g_ca - n.y * g_sa, qy = n.x * g_sa + n.y * g_ca, qz = n.z;
+    double ox = g_mrot[0] * n.x + g_mrot[1] * n.y + g_mrot[2] * n.z;
+    double oy = g_mrot[3] * n.x + g_mrot[4] * n.y + g_mrot[5] * n.z;
+    double oz = g_mrot[6] * n.x + g_mrot[7] * n.y + g_mrot[8] * n.z;
+    double qx = ox * g_ca - oy * g_sa, qy = ox * g_sa + oy * g_ca, qz = oz;
     return v3_make(qx, qy * g_ct + qz * g_st, -qy * g_st + qz * g_ct);
 }
 
@@ -633,6 +660,8 @@ static MeshDef *g_mesh;          /* defined with the registry below */
 static float *g_fit_pts = NULL;
 static int    g_fit_n = 0;
 static int    g_fit_stride = 1;
+static float *g_fit_rot = NULL;      /* rotated copy of the sampled points */
+static int    g_fit_rot_cap = 0;
 
 static double compute_fit_scale(double aspect) {
     double hw = VIEW_HALF * aspect, hh = VIEW_HALF;
@@ -702,11 +731,40 @@ static void build_analytic_cloud(void) {
 
 static void setup_fit_cloud(void) {
     if (g_mesh) {
+        int stride = g_mesh->fit_stride > 0 ? g_mesh->fit_stride : 1;
+        int n = (g_mesh->nvert + stride - 1) / stride;
+        int i;
+        if (n > g_fit_rot_cap) {
+            float *p = (float *)realloc(g_fit_rot, sizeof(float) * 3 * (size_t)n);
+            if (p) { g_fit_rot = p; g_fit_rot_cap = n; }
+        }
+        if (g_fit_rot && n <= g_fit_rot_cap) {
+            for (i = 0; i < n; ++i) {
+                const float *v = &g_mesh->verts[(size_t)i * stride * 3];
+                g_fit_rot[i * 3 + 0] = (float)(g_mrot[0] * v[0] + g_mrot[1] * v[1] + g_mrot[2] * v[2]);
+                g_fit_rot[i * 3 + 1] = (float)(g_mrot[3] * v[0] + g_mrot[4] * v[1] + g_mrot[5] * v[2]);
+                g_fit_rot[i * 3 + 2] = (float)(g_mrot[6] * v[0] + g_mrot[7] * v[1] + g_mrot[8] * v[2]);
+            }
+            g_fit_pts = g_fit_rot;
+            g_fit_n = n;
+            g_fit_stride = 1;
+            return;
+        }
         g_fit_pts = (float *)g_mesh->verts;
         g_fit_n = g_mesh->nvert;
-        g_fit_stride = g_mesh->fit_stride > 0 ? g_mesh->fit_stride : 1;
+        g_fit_stride = stride;
     } else {
         build_analytic_cloud();
+        if (g_up_axis != 0) {
+            int i;
+            for (i = 0; i < g_fit_n; ++i) {
+                float *p = &g_acloud[i * 3];
+                double x = p[0], y = p[1], z = p[2];
+                p[0] = (float)(g_mrot[0] * x + g_mrot[1] * y + g_mrot[2] * z);
+                p[1] = (float)(g_mrot[3] * x + g_mrot[4] * y + g_mrot[5] * z);
+                p[2] = (float)(g_mrot[6] * x + g_mrot[7] * y + g_mrot[8] * z);
+            }
+        }
     }
 }
 
@@ -1953,7 +2011,7 @@ static void models_poll(int force) {
             if (!ext) continue;
             if (_wcsicmp(ext, L".stl") && _wcsicmp(ext, L".obj") && _wcsicmp(ext, L".ply") &&
                 _wcsicmp(ext, L".off") && _wcsicmp(ext, L".gltf") && _wcsicmp(ext, L".glb") &&
-                _wcsicmp(ext, L".3mf")) continue;
+                _wcsicmp(ext, L".3mf") && _wcsicmp(ext, L".fbx")) continue;
             if (ne < (int)(sizeof(ents) / sizeof(ents[0]))) {
                 DirEnt *d = &ents[ne++];
                 _snwprintf(d->path, MAX_PATH, L"%ls\\%ls", g_models_dir, fd.cFileName);
@@ -2034,6 +2092,7 @@ static void print_help(void) {
         "      --snapshot       Render a single frame to stdout and exit\n"
         "      --angle <deg>    Initial rotation angle in degrees (default: 0)\n"
         "      --tilt <deg>     Initial axis tilt in degrees, -90..90 (default: 0)\n"
+        "      --up <axis>      Model up axis: z, y or x (default: z; key A cycles)\n"
         "      --shatter        With --snapshot: shatter and simulate the fall\n"
         "      --sim <sec>      With --shatter: seconds to simulate (default: 3)\n"
         "      --menu           With --snapshot: draw the model list (preview)\n"
@@ -2063,6 +2122,7 @@ static void print_help(void) {
         "  SHIFT+LEFT / RIGHT   Move the light-source colour slider (wraps)\n"
         "  PAGE UP / PAGE DOWN  Weaker / stronger LOD for meshes that were\n"
         "                       reduced from too many triangles\n"
+        "  A                    Cycle the model up axis (z -> y -> x)\n"
         "  POS1 (HOME)          Toggle the FPS display (bottom-left)\n"
         "  g / p                Export a full 360-degree turn as an animated\n"
         "                       GIF / APNG (current colours, tilt and speed;\n"
@@ -2164,6 +2224,14 @@ static int parse_args(int argc, char **argv) {
                 return 0;
             }
             g_start_tilt = atof(argv[++i]);
+        } else if (_stricmp(a, "--up") == 0) {
+            const char *v;
+            if (i + 1 >= argc) { fprintf(stderr, "error: --up requires z, y or x\n"); return 0; }
+            v = argv[++i];
+            if (_stricmp(v, "z") == 0) g_up_arg = 0;
+            else if (_stricmp(v, "y") == 0) g_up_arg = 1;
+            else if (_stricmp(v, "x") == 0) g_up_arg = 2;
+            else { fprintf(stderr, "error: --up expects z, y or x\n"); return 0; }
         } else if (_stricmp(a, "--shatter") == 0) {
             g_shatter = 1;
         } else if (_stricmp(a, "--sim") == 0) {
@@ -2539,6 +2607,8 @@ int main(int argc, char **argv) {
 
     if (!parse_args(argc, argv)) return 1;
 
+    if (g_up_arg >= 0) { g_up_axis = g_up_arg; model_rot_update(); }
+
     if (g_list_cams) {
         char names[WEBCAM_MAX_DEV][128];
         char err[160];
@@ -2751,6 +2821,13 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_PRIOR) apply_lod(-1);
                                 else if (vk == VK_NEXT)  apply_lod(1);
                                 else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
+                                else if (ch == 'a' || ch == 'A') {
+                                    g_up_axis = (g_up_axis + 1) % 3;
+                                    model_rot_update();
+                                    g_scale_mesh = NULL;
+                                    g_scale_aspect = -1.0;
+                                    msg_setf("axis: %s-up", g_up_axis == 0 ? "z" : (g_up_axis == 1 ? "y" : "x"));
+                                }
                                 else if (vk == VK_LEFT)  { if (cks & SHIFT_PRESSED) color_step(&g_light_sel, &g_light_color, -1); else color_step(&g_color_sel, &g_fg_color, -1); }
                                 else if (vk == VK_RIGHT) { if (cks & SHIFT_PRESSED) color_step(&g_light_sel, &g_light_color,  1); else color_step(&g_color_sel, &g_fg_color,  1); }
                                 else if (ch == 'q' || ch == 'Q') g_running = 0;
@@ -2778,6 +2855,13 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_PRIOR) apply_lod(-1);
                                 else if (vk == VK_NEXT)  apply_lod(1);
                                 else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
+                                else if (ch == 'a' || ch == 'A') {
+                                    g_up_axis = (g_up_axis + 1) % 3;
+                                    model_rot_update();
+                                    g_scale_mesh = NULL;
+                                    g_scale_aspect = -1.0;
+                                    msg_setf("axis: %s-up", g_up_axis == 0 ? "z" : (g_up_axis == 1 ? "y" : "x"));
+                                }
                                 else if (ch == 'g' || ch == 'G') export_animation(h_out, is_console, grid, cols, rows, 0);
                                 else if (ch == 'p' || ch == 'P') export_animation(h_out, is_console, grid, cols, rows, 1);
                                 else if (ch == 'r' || ch == 'R') models_poll(1);
@@ -2912,5 +2996,6 @@ int main(int argc, char **argv) {
     free(out);
     free(g_parts);
     free(g_col_h);
+    free(g_fit_rot);
     return 0;
 }
