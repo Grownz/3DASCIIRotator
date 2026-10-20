@@ -180,8 +180,8 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 | `Tab` | Toggle the model list on the right. While open, `Up`/`Down` or the mouse wheel move the selection (wrapping around at both ends), `Enter`/`Space` load it, and closing with `Tab` loads the current selection. |
 | `Page Up` / `Page Down` | Weaker / stronger LOD for meshes that were reduced (too many triangles). |
 | `A` | Cycle the model up axis (`z` -> `y` -> `x`). |
-| `Left` / `Right` | In the open model list: move the mesh-colour slider (applied live, wraps around). |
-| `Shift`+`Left` / `Right` | In the open model list: move the light-source colour slider (wraps around). |
+| `Left` / `Right` | In the open model list: move the selected colour slider (applied live, wraps around). |
+| `C` | In the open model list: switch between the mesh and light colour sliders. The active icon is drawn in its colour, the other is greyed out. |
 | `Pos1` / `Home` | Toggle the FPS display in the bottom-left corner. |
 | `g` / `p` | Export a full 360-degree turn as an animated GIF / APNG (current colours, tilt and speed; transparent background, no HUD). |
 | `R` | Rescan the `models/` folder now. |
@@ -345,7 +345,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.23**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.24**. See [changelog.md](changelog.md) for details.
 
 Each entry on the [releases page](https://github.com/Grownz/3DASCIIRotator/releases)
 uses the same note format: a one-line summary, a short labelled list of the

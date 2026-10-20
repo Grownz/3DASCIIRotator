@@ -1,5 +1,5 @@
 ﻿/* ============================================================================
- * 3D ASCII Rotator - version 0.2.23
+ * 3D ASCII Rotator - version 0.2.24
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -50,7 +50,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.23"
+#define APP_VERSION "0.2.24"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -125,6 +125,7 @@ static int    g_fg_color = 7;                      /* ANSI colour of the shape *
 static int    g_color_sel = 0;                     /* index into COLORS[]      */
 static int    g_light_color = 15;                  /* ANSI colour of the light */
 static int    g_light_sel = 0;                     /* index into COLORS[]      */
+static int    g_color_focus = 0;                   /* 0 = mesh, 1 = light      */
 static unsigned char g_grad[RAMP_N];              /* ramp level -> palette idx */
 static signed char   g_ramp_rev[256];             /* ramp char  -> level       */
 static short *g_cc = NULL;                         /* per-cell colour override */
@@ -1396,8 +1397,9 @@ static const char *const LOGO_LIGHT[3] = { " \\ | / ", " -(*)- ", " / | \\ " };
 
 /* Draw one labelled colour slider (logo on the left, gradient + caret). */
 static void draw_color_slider(char *grid, int cols, int rows, int x0, int r0,
-                              const char *const logo[3], const char *label, int sel) {
+                              const char *const logo[3], const char *label, int sel, int active) {
     int logo_w = 0, sx, sw, i, c;
+    int icon = active ? COLORS[sel] : 240;   /* grey when not selected */
     if (logo) {
         int k;
         for (k = 0; k < 3; ++k) { int l = (int)strlen(logo[k]); if (l > logo_w) logo_w = l; }
@@ -1408,7 +1410,12 @@ static void draw_color_slider(char *grid, int cols, int rows, int x0, int r0,
         for (k = 0; k < 3 && r0 + k < rows; ++k) {
             const char *t = logo[k];
             c = sx;
-            while (*t && c < cols - 1) grid[(size_t)(r0 + k) * cols + c++] = *t++;
+            while (*t && c < cols - 1) {
+                size_t idx = (size_t)(r0 + k) * cols + c;
+                grid[idx] = *t;
+                if (g_cc) g_cc[idx] = (short)icon;
+                ++c; ++t;
+            }
         }
         sx += logo_w + 1;
     }
@@ -1492,15 +1499,15 @@ static void draw_menu(char *grid, int cols, int rows) {
         if (r0 + 7 <= rows) {
             _snprintf(lbl, sizeof(lbl), " mesh %d/%d", g_color_sel + 1, COLOR_N);
             lbl[sizeof(lbl) - 1] = '\0';
-            draw_color_slider(grid, cols, rows, x0, r0, LOGO_MESH, lbl, g_color_sel);
+            draw_color_slider(grid, cols, rows, x0, r0, LOGO_MESH, lbl, g_color_sel, g_color_focus == 0);
             r0 += 4;
             _snprintf(lbl, sizeof(lbl), " light %d/%d", g_light_sel + 1, COLOR_N);
             lbl[sizeof(lbl) - 1] = '\0';
-            draw_color_slider(grid, cols, rows, x0, r0, LOGO_LIGHT, lbl, g_light_sel);
+            draw_color_slider(grid, cols, rows, x0, r0, LOGO_LIGHT, lbl, g_light_sel, g_color_focus == 1);
         } else {                               /* too little room: mesh only */
             _snprintf(lbl, sizeof(lbl), " mesh %d/%d", g_color_sel + 1, COLOR_N);
             lbl[sizeof(lbl) - 1] = '\0';
-            draw_color_slider(grid, cols, rows, x0, b0, NULL, lbl, g_color_sel);
+            draw_color_slider(grid, cols, rows, x0, b0, NULL, lbl, g_color_sel, 1);
         }
     }
     (void)sw;
@@ -2117,9 +2124,9 @@ static void print_help(void) {
         "                       Up/Down (wraps around; tilt pauses), load with\n"
         "                       SPACE/ENTER, and the selection is loaded when\n"
         "                       you close the list with TAB\n"
-        "  LEFT / RIGHT         In the list: move the mesh-colour slider\n"
+        "  LEFT / RIGHT         In the list: move the selected colour slider\n"
         "                       (256-colour scale, applied live, wraps around)\n"
-        "  SHIFT+LEFT / RIGHT   Move the light-source colour slider (wraps)\n"
+        "  C                    In the list: switch between mesh and light colour\n"
         "  PAGE UP / PAGE DOWN  Weaker / stronger LOD for meshes that were\n"
         "                       reduced from too many triangles\n"
         "  A                    Cycle the model up axis (z -> y -> x)\n"
@@ -2806,7 +2813,6 @@ int main(int argc, char **argv) {
                         if (r->EventType == KEY_EVENT && r->Event.KeyEvent.bKeyDown) {
                             WORD vk = r->Event.KeyEvent.wVirtualKeyCode;
                             char ch = r->Event.KeyEvent.uChar.AsciiChar;
-                            DWORD cks = r->Event.KeyEvent.dwControlKeyState;
                             if (g_webcam) {
                                 if (vk == VK_ESCAPE || ch == 'q' || ch == 'Q') g_running = 0;
                                 else if (vk == VK_HOME) g_show_fps = !g_show_fps;
@@ -2828,8 +2834,9 @@ int main(int argc, char **argv) {
                                     g_scale_aspect = -1.0;
                                     msg_setf("axis: %s-up", g_up_axis == 0 ? "z" : (g_up_axis == 1 ? "y" : "x"));
                                 }
-                                else if (vk == VK_LEFT)  { if (cks & SHIFT_PRESSED) color_step(&g_light_sel, &g_light_color, -1); else color_step(&g_color_sel, &g_fg_color, -1); }
-                                else if (vk == VK_RIGHT) { if (cks & SHIFT_PRESSED) color_step(&g_light_sel, &g_light_color,  1); else color_step(&g_color_sel, &g_fg_color,  1); }
+                                else if (ch == 'c' || ch == 'C') g_color_focus = !g_color_focus;
+                                else if (vk == VK_LEFT)  { if (g_color_focus) color_step(&g_light_sel, &g_light_color, -1); else color_step(&g_color_sel, &g_fg_color, -1); }
+                                else if (vk == VK_RIGHT) { if (g_color_focus) color_step(&g_light_sel, &g_light_color,  1); else color_step(&g_color_sel, &g_fg_color,  1); }
                                 else if (ch == 'q' || ch == 'Q') g_running = 0;
                                 else if (ch == 'g' || ch == 'G') export_animation(h_out, is_console, grid, cols, rows, 0);
                                 else if (ch == 'p' || ch == 'P') export_animation(h_out, is_console, grid, cols, rows, 1);

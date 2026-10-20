@@ -4,6 +4,13 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.24] - 2026-10-21
+
+### Changed
+- In the model list, `C` switches between the mesh and light colour sliders and
+  `Left`/`Right` adjust the selected one. The active icon is drawn in its
+  colour while the other is greyed out.
+
 ## [0.2.23] - 2026-10-21
 
 ### Added
