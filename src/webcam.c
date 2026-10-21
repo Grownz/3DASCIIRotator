@@ -314,9 +314,10 @@ int webcam_start(int index, char *err, int errsz) {
         goto fail;
     }
 
-    hr = pMFCreateAttributes(&rattr, 2);
+    hr = pMFCreateAttributes(&rattr, 3);
     if (SUCCEEDED(hr)) {
         rattr->lpVtbl->SetUINT32(rattr, &MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
+        rattr->lpVtbl->SetUINT32(rattr, &MF_SOURCE_READER_DISCONNECT_MEDIASOURCE_ON_SHUTDOWN, TRUE);
         hr = pMFCreateSourceReaderFromMediaSource(source, rattr, &g_reader);
     }
     if (FAILED(hr) || !g_reader) {
@@ -406,6 +407,9 @@ void webcam_stop(void) {
     DWORD w;
     if (!g_started) return;
     InterlockedExchange(&g_stop, 1);
+    if (g_reader) {
+        g_reader->lpVtbl->Flush(g_reader, (DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM);
+    }
     if (g_source) g_source->lpVtbl->Shutdown(g_source);   /* abort a pending ReadSample */
     if (g_thread) {
         w = WaitForSingleObject(g_thread, 5000);

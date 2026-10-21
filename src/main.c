@@ -1,5 +1,5 @@
 ﻿/* ============================================================================
- * 3D ASCII Rotator - version 0.2.27
+ * 3D ASCII Rotator - version 0.2.28
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -50,7 +50,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.27"
+#define APP_VERSION "0.2.28"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -3024,7 +3024,8 @@ int main(int argc, char **argv) {
                 if (!cc_ensure(cols * rows)) { free(g_cc); g_cc = NULL; g_cc_cap = 0; }
                 g_scale_mesh = NULL;   /* console changed: re-fit the model */
                 g_shattered = 0; /* particle field is tied to the old size */
-                write_all(h_out, is_console, "\x1b[2J", -1);
+                /* No screen clear here: the present pass overwrites every
+                 * cell, and clearing first shows as a blank flash on resize. */
             }
         }
         if (!grid) { Sleep(16); continue; } /* no valid console size yet */

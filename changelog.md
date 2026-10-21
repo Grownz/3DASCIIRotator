@@ -4,6 +4,15 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.28] - 2026-10-21
+
+### Changed
+- Webcam mode: resizing the console no longer clears the screen before the
+  redraw, so the picture stays stable while the window is resized.
+- Exiting is much faster: the webcam reader is flushed to abort the blocking
+  read, cutting shutdown from the 5 s timeout to about 0.3 s; the render
+  worker pool is joined promptly.
+
 ## [0.2.27] - 2026-10-21
 
 ### Changed
