@@ -4,55 +4,61 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.2.28] - 2026-10-21
+## [3.0.0] - 2026-10-21
 
-### Changed
-- Webcam mode: resizing the console no longer clears the screen before the
-  redraw, so the picture stays stable while the window is resized.
-- Exiting is much faster: the webcam reader is flushed to abort the blocking
-  read, cutting shutdown from the 5 s timeout to about 0.3 s; the render
-  worker pool is joined promptly.
+A major release focused on robustness, the supported formats and a smoother
+runtime.
 
-## [0.2.27] - 2026-10-21
+### Model formats & parsing
+- PLY: the triangle buffer grows with the actual count, vertex indices are
+  validated and binary data is bounds-checked.
+- glTF/GLB: out-of-range indices are ignored, JSON nesting is bounded, node
+  traversal has a visit budget, triangle strips and fans are supported,
+  compressed (Draco/meshopt) files are reported as unsupported, and duplicate
+  scene roots are avoided.
+- FBX: node recursion is bounded, model parent transforms are composed and a
+  triangle-cap truncation is reported.
+- 3MF: ZIP entry sizes and central-directory bounds are checked, XML comments,
+  CDATA and processing instructions are skipped, component objects are resolved
+  with their transforms, and object/material limits are clamped.
+- Non-finite (NaN/Inf) vertices are rejected by every loader.
 
-### Changed
-- Polish: validated `--mesh`/`--light` values, NaN/Inf rejection, clamped
-  shatter debris, checked path conversions, a static model-scan buffer, and a
-  webcam frame event instead of polling.
-- The export's final downscale box-averages the glyph coverage, so thin
-  strokes survive.
-- Removed dead code (unused mesh fields, duplicate globals) and consolidated
-  the byte readers; the worker pool is joined on exit.
-- Build: runs from any directory and uses `/arch:AVX`, `/WX`, `/Brepro` and
-  PDBs under `build\`.
+### Export
+- Each animation frame keeps its own colours, so the palette follows the
+  motion across the whole turn.
+- The APNG palette never exceeds 256 entries; above 127 colours a single
+  opaque alpha level is used.
+- Playback follows the current spin speed, and GIF frame delays are spread so
+  the total duration matches the APNG.
+- Write errors are detected and reported.
+- The final downscale box-averages glyph coverage, so thin strokes survive.
 
-## [0.2.26] - 2026-10-21
+### Webcam
+- Shutdown aborts the blocking read and completes in about 0.3 s instead of
+  waiting for a 5 s timeout.
+- Resizing the console no longer clears the screen first, so the picture stays
+  stable while the window is resized.
+- Buffer length and stride are validated; media-type changes and capture
+  errors stop the stream with a status message.
+- A frame event replaces the polling wait.
 
-### Changed
-- Model names keep dots now (only the final extension is stripped), so files
-  such as `Dragon 2.5_fbx.fbx` are selectable by their real name.
-- Robustness: partial console writes are retried; the per-cell colour/luminance
-  buffers degrade gracefully when they cannot grow; `--tilt` is clamped in every
-  mode; a failed BVH build is reported; LOD caps the rebuilt mesh at 500k
-  triangles and refreshes the fit; the help text shows the correct numbers.
-- The 2x2 supersampling offsets use the true view scale, for cleaner edges.
-- Export playback follows the current spin speed and reports write errors.
-- 3MF resolves components and skips XML comments/CDATA; glTF supports
-  triangle strips/fans, rejects compressed meshes and avoids duplicate roots;
-  FBX composes parent transforms and reports truncation.
+### Runtime & UI
+- Model names keep dots (only the final extension is stripped), so files such
+  as `Dragon 2.5_fbx.fbx` are selectable by their real name.
+- `--mesh`/`--light` values are validated; `--tilt` is clamped in every mode.
+- 2x2 supersampling uses the true view scale, for cleaner edges.
+- LOD caps a rebuilt mesh at 500k triangles and refreshes the fit; a failed
+  BVH build is reported.
+- The help text shows the correct speed/LOD numbers and lists every supported
+  format.
 
-## [0.2.25] - 2026-10-21
-
-### Changed
-- Hardened the mesh readers: PLY grows its triangle buffer with the real count
-  and validates vertex indices and binary bounds; glTF rejects out-of-range
-  indices, bounds JSON nesting and caps node traversal; FBX bounds its node
-  recursion; ZIP/3MF checks entry sizes and directory bounds.
-- The animation export stores each frame's own colours and keeps the APNG
-  palette within 256 entries for many-coloured models.
-- The webcam shuts its media source down on stop and only frees resources once
-  the capture thread has exited; the sidecar read and model-name collision
-  handling are bounded.
+### Build & internals
+- `build.bat` runs from any directory, uses `/WX`, `/Brepro` and `/arch:AVX`
+  (Sandy Bridge 2011+) and keeps PDBs under `build\`.
+- Removed dead code and duplicate globals, consolidated the byte readers and
+  grow helpers, and the render worker pool is joined on exit.
+- Model-scan and sidecar paths are bounded, and the scan buffer no longer sits
+  on the stack.
 
 ## [0.2.24] - 2026-10-21
 
