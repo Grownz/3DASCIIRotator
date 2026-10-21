@@ -1,13 +1,13 @@
 ﻿/* ============================================================================
- * 3D ASCII Rotator - version 0.2.26
+ * 3D ASCII Rotator - version 0.2.27
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
  *
  * Shapes are analytic signed-distance fields (cube, cylinder, diamond, sphere)
  * or triangle meshes: the built-in models and any .stl/.obj/.ply/.off/.gltf/
- * .glb/.3mf dropped into a "models" folder next to the executable, which is
- * rescanned live.
+ * .glb/.3mf/.fbx dropped into a "models" folder next to the executable, which
+ * is rescanned live.
  *
  * Meshes are ray traced with a bounding-volume hierarchy and shaded flat;
  * analytic shapes use SDF ray marching. Luminance is mapped onto a 15-level
@@ -50,7 +50,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "0.2.26"
+#define APP_VERSION "0.2.27"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -136,23 +136,17 @@ static int    g_cellfg_cap = 0;
 static double *g_lum = NULL;                       /* per-cell luminance buffer */
 static int    g_lum_cap = 0;
 
-static int cellfg_ensure(int n) {
-    if (n > g_cellfg_cap) {
-        short *p = (short *)realloc(g_cellfg, sizeof(short) * (size_t)n);
-        if (!p) return 0;
-        g_cellfg = p; g_cellfg_cap = n;
+static int grow_buf(void **p, int *cap, size_t elem, int n) {
+    if (n > *cap) {
+        void *np = realloc(*p, elem * (size_t)n);
+        if (!np) return 0;
+        *p = np; *cap = n;
     }
     return 1;
 }
 
-static int lum_ensure(int n) {
-    if (n > g_lum_cap) {
-        double *p = (double *)realloc(g_lum, sizeof(double) * (size_t)n);
-        if (!p) return 0;
-        g_lum = p; g_lum_cap = n;
-    }
-    return 1;
-}
+static int cellfg_ensure(int n) { return grow_buf((void **)&g_cellfg, &g_cellfg_cap, sizeof(short), n); }
+static int lum_ensure(int n)    { return grow_buf((void **)&g_lum, &g_lum_cap, sizeof(double), n); }
 static int    g_hud_len = 0, g_msg_len = 0, g_fps_len = 0, g_menu_x0 = -1, g_rows = 0;
 
 /* Usable 256-colour indices: everything except black (0) and the five
@@ -277,14 +271,7 @@ static void msg_setf(const char *fmt, ...) {
     g_msg_time = 5.0;
 }
 
-static int cc_ensure(int n) {
-    if (n > g_cc_cap) {
-        short *p = (short *)realloc(g_cc, sizeof(short) * (size_t)n);
-        if (!p) return 0;
-        g_cc = p; g_cc_cap = n;
-    }
-    return 1;
-}
+static int cc_ensure(int n) { return grow_buf((void **)&g_cc, &g_cc_cap, sizeof(short), n); }
 
 /* Is this character cell part of the UI (HUD / message / FPS / menu)? */
 static int is_ui_cell(int r, int c) {
@@ -388,7 +375,6 @@ typedef struct {
     BvhNode *bvh;
     int     *order;
     float   *cent;
-    double   r, hz;   /* rotation-invariant half-extents used for auto-fit */
     double   elev;    /* camera elevation used for this shape              */
     double   zoom;    /* multiplier on the auto-fit scale                  */
     float   *tdata;   /* ntri*9: the three vertices, packed per triangle   */
@@ -397,7 +383,6 @@ typedef struct {
     unsigned char *face_mat;
     unsigned char  matpal[MAT_MAX * 3];
     int            nmat;
-    float    bmin[3], bmax[3]; /* object-space bounding box                 */
     int      owned;   /* 1 = verts/tris are malloc'd (free on destroy)     */
     int      built;   /* 1 = BVH is built                                  */
     /* optional LOD source (kept when the mesh had too many triangles) */
@@ -407,9 +392,7 @@ typedef struct {
     int      lod_level;
 } MeshDef;
 
-static MeshDef *g_mesh;   /* forward declaration (defined with the registry) */
-
-static unsigned char g_matgrad[MAT_MAX * RAMP_N];  /* per-material ramp gradient */
+static MeshDef *g_mesh;   /* forward declaration (defined with the registry) */static unsigned char g_matgrad[MAT_MAX * RAMP_N];  /* per-material ramp gradient */
 static unsigned char g_matgrad_light = 0xFF;
 static MeshDef       *g_matgrad_mesh = NULL;
 
@@ -624,19 +607,6 @@ static int mesh_build(MeshDef *m) {
     g_bvh_n = 0;
     bvh_build(m, 0, m->ntri);
 
-    m->r = 0.0; m->hz = 0.0;
-    for (i = 0; i < 3; ++i) { m->bmin[i] = 1e30f; m->bmax[i] = -1e30f; }
-    for (i = 0; i < m->nvert; ++i) {
-        const float *v = &m->verts[(size_t)i * 3];
-        double rr = sqrt((double)v[0] * v[0] + (double)v[1] * v[1]);
-        int k;
-        if (rr > m->r) m->r = rr;
-        if (fabs((double)v[2]) > m->hz) m->hz = fabs((double)v[2]);
-        for (k = 0; k < 3; ++k) {
-            if (v[k] < m->bmin[k]) m->bmin[k] = v[k];
-            if (v[k] > m->bmax[k]) m->bmax[k] = v[k];
-        }
-    }
     m->fit_stride = (m->nvert > 20000) ? (m->nvert / 20000) : 1;
     m->built = 1;
     return 1;
@@ -664,7 +634,6 @@ static void mesh_destroy(MeshDef *m) {
  */
 #define FIT_MARGIN 0.90          /* silhouette stays within 90% of the half view */
 
-static MeshDef *g_mesh;          /* defined with the registry below */
 
 static float *g_fit_pts = NULL;
 static int    g_fit_n = 0;
@@ -700,8 +669,6 @@ static double compute_fit_scale(double aspect) {
         }
         if (smax < best) best = smax;
     }
-    if (best > 8.0) best = 8.0;
-    if (best < 0.0) best = 0.0;
     if (g_mesh && g_mesh->zoom > 0.01) best *= g_mesh->zoom;
     return best;
 }
@@ -778,21 +745,21 @@ static void setup_fit_cloud(void) {
 }
 
 static MeshDef g_mesh_stego = { STEGO_VERT, STEGO_TRI, STEGO_NVERT, STEGO_NTRI,
-                                NULL, NULL, NULL, 0.0, 0.0, 12.0, 1.0 };
+                                NULL, NULL, NULL, 12.0, 1.0 };
 static MeshDef g_mesh_f1    = { F1_VERT, F1_TRI, F1_NVERT, F1_NTRI,
-                                NULL, NULL, NULL, 0.0, 0.0, 16.0, 1.0 };
+                                NULL, NULL, NULL, 16.0, 1.0 };
 static MeshDef g_mesh_comp  = { COMPANION_VERT, COMPANION_TRI, COMPANION_NVERT, COMPANION_NTRI,
-                                NULL, NULL, NULL, 0.0, 0.0, 18.0, 1.0 };
+                                NULL, NULL, NULL, 18.0, 1.0 };
 static MeshDef g_mesh_maus  = { MAUS_VERT, MAUS_TRI, MAUS_NVERT, MAUS_NTRI,
-                                NULL, NULL, NULL, 0.0, 0.0, 12.0, 1.0 };
+                                NULL, NULL, NULL, 12.0, 1.0 };
 static MeshDef g_mesh_fish  = { FISH_VERT, FISH_TRI, FISH_NVERT, FISH_NTRI,
-                                NULL, NULL, NULL, 0.0, 0.0, 12.0, 1.0 };
+                                NULL, NULL, NULL, 12.0, 1.0 };
 static MeshDef g_mesh_kebab = { KEBAB_VERT, KEBAB_TRI, KEBAB_NVERT, KEBAB_NTRI,
-                                NULL, NULL, NULL, 0.0, 0.0, 14.0, 1.0 };
+                                NULL, NULL, NULL, 14.0, 1.0 };
 static MeshDef g_mesh_berlin = { BERLIN_VERT, BERLIN_TRI, BERLIN_NVERT, BERLIN_NTRI,
-                                NULL, NULL, NULL, 0.0, 0.0, 8.0, 1.0 };
+                                NULL, NULL, NULL, 8.0, 1.0 };
 static MeshDef g_mesh_china = { CHINA_VERT, CHINA_TRI, CHINA_NVERT, CHINA_NTRI,
-                                NULL, NULL, NULL, 0.0, 0.0, 6.0, 1.0 };
+                                NULL, NULL, NULL, 6.0, 1.0 };
 
 /* ---- registry: built-in shapes + user models, in insertion order --------- */
 
@@ -1159,6 +1126,19 @@ static DWORD WINAPI pool_thread(LPVOID p) {
     }
 }
 
+static void pool_shutdown(void) {
+    int i;
+    if (!g_pool) return;
+    g_pool_quit = 1;
+    for (i = 0; i < g_pool_n; ++i) if (g_pool[i].start) SetEvent(g_pool[i].start);
+    for (i = 0; i < g_pool_n; ++i) if (g_pool[i].done) WaitForSingleObject(g_pool[i].done, 2000);
+    for (i = 0; i < g_pool_n; ++i) {
+        if (g_pool[i].start) CloseHandle(g_pool[i].start);
+        if (g_pool[i].done) CloseHandle(g_pool[i].done);
+    }
+    free(g_pool); g_pool = NULL; g_pool_n = 0;
+}
+
 static void pool_ensure(void) {
     static int tried = 0;
     int cores, i;
@@ -1180,6 +1160,7 @@ static void pool_ensure(void) {
         CloseHandle(h);
     }
     g_pool_n = i;
+    atexit(pool_shutdown);
 }
 
 /* Run `fn` over the rows, splitting them across the pool; the caller also
@@ -1455,7 +1436,7 @@ static void draw_color_slider(char *grid, int cols, int rows, int x0, int r0,
 static void draw_menu(char *grid, int cols, int rows) {
     int pw = cols / 4;
     int x0, listrows, i, r, c;
-    int b0, sw;
+    int b0;
     if (pw < 12) pw = 12;
     if (pw > cols - 4) pw = cols - 4;
     if (pw < 4) return;
@@ -1508,21 +1489,14 @@ static void draw_menu(char *grid, int cols, int rows) {
     {
         char lbl[48];
         int r0 = b0;
-        if (r0 + 7 <= rows) {
-            _snprintf(lbl, sizeof(lbl), " mesh %d/%d", g_color_sel + 1, COLOR_N);
-            lbl[sizeof(lbl) - 1] = '\0';
-            draw_color_slider(grid, cols, rows, x0, r0, LOGO_MESH, lbl, g_color_sel, g_color_focus == 0);
-            r0 += 4;
-            _snprintf(lbl, sizeof(lbl), " light %d/%d", g_light_sel + 1, COLOR_N);
-            lbl[sizeof(lbl) - 1] = '\0';
-            draw_color_slider(grid, cols, rows, x0, r0, LOGO_LIGHT, lbl, g_light_sel, g_color_focus == 1);
-        } else {                               /* too little room: mesh only */
-            _snprintf(lbl, sizeof(lbl), " mesh %d/%d", g_color_sel + 1, COLOR_N);
-            lbl[sizeof(lbl) - 1] = '\0';
-            draw_color_slider(grid, cols, rows, x0, b0, NULL, lbl, g_color_sel, 1);
-        }
+        _snprintf(lbl, sizeof(lbl), " mesh %d/%d", g_color_sel + 1, COLOR_N);
+        lbl[sizeof(lbl) - 1] = '\0';
+        draw_color_slider(grid, cols, rows, x0, r0, LOGO_MESH, lbl, g_color_sel, g_color_focus == 0);
+        r0 += 4;
+        _snprintf(lbl, sizeof(lbl), " light %d/%d", g_light_sel + 1, COLOR_N);
+        lbl[sizeof(lbl) - 1] = '\0';
+        draw_color_slider(grid, cols, rows, x0, r0, LOGO_LIGHT, lbl, g_light_sel, g_color_focus == 1);
     }
-    (void)sw;
 }
 
 /* --------------------------------------------------------------- particles
@@ -1632,10 +1606,16 @@ static void shatter_step(double dt) {
                     if (r < g_p_cols && g_col_h[r] < PILE_MAX) { target = r; break; }
                 }
                 if (g_col_h[target] < PILE_MAX) {
-                    p->y = (float)(g_floor_row - g_col_h[target]);
+                    {
+                        int ry = g_floor_row - g_col_h[target];
+                        if (ry < 0) ry = 0;
+                        p->y = (float)ry;
+                    }
                     g_col_h[target]++;
                 } else {                         /* layer full: let it overlap */
-                    p->y = (float)(g_floor_row - (int)(rnd() * PILE_MAX));
+                    int ry = g_floor_row - (int)(rnd() * PILE_MAX);
+                    if (ry < 0) ry = 0;
+                    p->y = (float)ry;
                 }
                 p->x  = (float)target;
                 p->vy = 0.0f;
@@ -1737,10 +1717,15 @@ static void meta_read(const wchar_t *model_path, ModelMeta *m) {
     DWORD sz, got;
     char *buf;
 
-    wcscpy(jp, model_path);
-    dot = wcsrchr(jp, L'.');
-    if (dot) wcscpy((wchar_t *)dot, L".json");
-    else return;
+    {
+        size_t len = wcslen(model_path);
+        if (len >= MAX_PATH - 6) return;   /* room for ".json" + NUL */
+        wcscpy(jp, model_path);
+        dot = wcsrchr(jp, L'.');
+        if (!dot) return;
+        if ((size_t)(dot - jp) + 6 > MAX_PATH) return;
+        wcscpy((wchar_t *)dot, L".json");
+    }
     h = CreateFileW(jp, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
     sz = GetFileSize(h, NULL);
@@ -1825,6 +1810,11 @@ static MeshDef *make_mesh(RawMesh *rm, const ModelMeta *meta) {
         verts[i * 3 + 2] = (float)v.z;
         for (k = 0; k < 3; ++k) {
             double val = (&v.x)[k];
+            if (!(val == val) || val > 1e30 || val < -1e30) {   /* NaN/Inf */
+                free(verts);
+                free(rm->face_rgb); rm->face_rgb = NULL;
+                return NULL;
+            }
             if (val < mn[k]) mn[k] = val;
             if (val > mx[k]) mx[k] = val;
         }
@@ -1944,11 +1934,12 @@ static void stem_of(const wchar_t *name, char *out, int cap) {
     }
     if (lastdot > 0) n = lastdot;      /* strip only the final extension */
     w[n] = L'\0';
-    WideCharToMultiByte(CP_UTF8, 0, w, -1, out, cap, NULL, NULL);
+    if (cap <= 0) return;
+    out[0] = '\0';
+    if (WideCharToMultiByte(CP_UTF8, 0, w, -1, out, cap, NULL, NULL) <= 0) out[0] = '\0';
 }
 
-static MeshDef *load_model_mesh(const wchar_t *path, const char *stem,
-                                char *disp, int disp_cap, char *err, int errsz) {
+static MeshDef *load_model_mesh(const wchar_t *path, char *err, int errsz) {
     RawMesh rm;
     ModelMeta meta;
     MeshDef *m;
@@ -1959,10 +1950,7 @@ static MeshDef *load_model_mesh(const wchar_t *path, const char *stem,
     m = make_mesh(&rm, &meta);
     free(rm.verts);
     free(rm.tris);
-    if (!m) { strncpy(err, "degenerate or empty mesh", (size_t)errsz - 1); err[errsz - 1] = '\0'; return NULL; }
-    if (meta.has_name) { strncpy(disp, meta.name, (size_t)disp_cap - 1); }
-    else               { strncpy(disp, stem, (size_t)disp_cap - 1); }
-    disp[disp_cap - 1] = '\0';
+    if (!m) { strncpy(err, "degenerate or invalid mesh", (size_t)errsz - 1); err[errsz - 1] = '\0'; return NULL; }
     return m;
 }
 
@@ -1991,11 +1979,11 @@ static ModelFile g_models[MAX_MODELS];
 static int       g_model_count = 0;
 
 static MeshDef *model_load(int idx) {
-    char tmp[64], err[128];
+    char err[128];
     MeshDef *m;
     if (idx < 0 || idx >= g_model_count) return NULL;
     if (g_models[idx].mesh) return g_models[idx].mesh;
-    m = load_model_mesh(g_models[idx].path, g_models[idx].stem, tmp, sizeof(tmp), err, sizeof(err));
+    m = load_model_mesh(g_models[idx].path, err, sizeof(err));
     if (!m) {
         msg_setf("models: %ls: %s", g_models[idx].wname, err);
         return NULL;
@@ -2032,13 +2020,14 @@ static void models_init(void) {
     } else {
         p = wcsrchr(exe, L'\\');
         if (p) *p = L'\0';
-        _snwprintf(g_models_dir, MAX_PATH, L"%ls\\models", exe);
+        _snwprintf(g_models_dir, MAX_PATH - 1, L"%ls\\models", exe);
+        g_models_dir[MAX_PATH - 1] = L'\0';
     }
     CreateDirectoryW(g_models_dir, NULL);
 }
 
 static void models_poll(int force) {
-    DirEnt ents[256];
+    static DirEnt ents[256];
     int ne = 0, i;
     wchar_t pat[MAX_PATH];
     WIN32_FIND_DATAW fd;
@@ -2046,7 +2035,8 @@ static void models_poll(int force) {
     char sig[8192];
     int sp = 0;
 
-    _snwprintf(pat, MAX_PATH, L"%ls\\*", g_models_dir);
+    _snwprintf(pat, MAX_PATH - 1, L"%ls\\*", g_models_dir);
+    pat[MAX_PATH - 1] = L'\0';
     h = FindFirstFileW(pat, &fd);
     if (h != INVALID_HANDLE_VALUE) {
         do {
@@ -2059,7 +2049,8 @@ static void models_poll(int force) {
                 _wcsicmp(ext, L".3mf") && _wcsicmp(ext, L".fbx")) continue;
             if (ne < (int)(sizeof(ents) / sizeof(ents[0]))) {
                 DirEnt *d = &ents[ne++];
-                _snwprintf(d->path, MAX_PATH, L"%ls\\%ls", g_models_dir, fd.cFileName);
+                _snwprintf(d->path, MAX_PATH - 1, L"%ls\\%ls", g_models_dir, fd.cFileName);
+                d->path[MAX_PATH - 1] = L'\0';
                 wcsncpy(d->wname, fd.cFileName, MAX_PATH - 1); d->wname[MAX_PATH - 1] = L'\0';
                 d->mtime = ((unsigned long long)fd.ftLastWriteTime.dwHighDateTime << 32)
                          | fd.ftLastWriteTime.dwLowDateTime;
@@ -2174,9 +2165,9 @@ static void print_help(void) {
         "                       transparent background, no HUD)\n"
         "  R                    Rescan the models/ folder\n"
         "  q                    Quit\n\n"
-        "Drop .stl/.obj/.ply/.off files into the 'models' folder next to this\n"
-        "executable; they are detected automatically and added to the cycle.\n"
-        "OBJ files may use an .mtl for per-material colours.\n",
+        "Drop .stl/.obj/.ply/.off/.gltf/.glb/.3mf/.fbx files into the 'models'\n"
+        "folder next to this executable; they are detected automatically and\n"
+        "added to the cycle. OBJ files may use an .mtl for per-material colours.\n",
         APP_NAME, APP_VERSION,
         LOD_N - 1,
         (int)SPEED_STEP, (int)MAX_SPEED, (int)SPEED_STEP, (int)MIN_SPEED,
@@ -2236,12 +2227,19 @@ static int parse_args(int argc, char **argv) {
                 else if (_stricmp(v, "png") == 0) g_export_fmt = 2;
                 else { fprintf(stderr, "error: --export expects gif or png\n"); return 0; }
             }
-        } else if (_stricmp(a, "--mesh") == 0) {
-            if (i + 1 >= argc) { fprintf(stderr, "error: --mesh requires RRGGBB\n"); return 0; }
-            g_mesh_rgb = (unsigned)strtoul(argv[++i], NULL, 16);
-        } else if (_stricmp(a, "--light") == 0) {
-            if (i + 1 >= argc) { fprintf(stderr, "error: --light requires RRGGBB\n"); return 0; }
-            g_light_rgb = (unsigned)strtoul(argv[++i], NULL, 16);
+        } else if (_stricmp(a, "--mesh") == 0 || _stricmp(a, "--light") == 0) {
+            const char *v;
+            char *end;
+            unsigned long rgb;
+            if (i + 1 >= argc) { fprintf(stderr, "error: %s requires RRGGBB\n", a); return 0; }
+            v = argv[++i];
+            rgb = strtoul(v, &end, 16);
+            if (end == v || *end != '\0' || rgb > 0xFFFFFFu) {
+                fprintf(stderr, "error: %s expects a hex RGB value (RRGGBB)\n", a);
+                return 0;
+            }
+            if (_stricmp(a, "--mesh") == 0) g_mesh_rgb = (unsigned)rgb;
+            else                            g_light_rgb = (unsigned)rgb;
         } else if (_stricmp(a, "--fps") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "error: --fps requires a value\n");
@@ -2464,7 +2462,9 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
     char *crop = NULL;
     double save_angle = g_angle;
     int save_shat = g_shattered;
-    int delay_cs, delay_num, delay_den;
+    int delay_num, delay_den;
+    double frame_dt = 1.0 / 30.0;
+    double gif_cum = 0.0;
     size_t npix, fbytes, cbytes;
 
     if (cols <= 0 || rows <= 0) return 0;
@@ -2615,7 +2615,7 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
     {
         double sp = g_speed > 0.1 ? g_speed : 15.0;
         double dt = (360.0 / sp) / (double)NF;   /* seconds per frame */
-        delay_cs = (int)(dt * 100.0 + 0.5);  if (delay_cs < 1) delay_cs = 1;
+        frame_dt = dt;
         delay_num = (int)(dt * 10000.0 + 0.5);
         delay_den = 10000;
         if (delay_num < 1) delay_num = 1;
@@ -2634,27 +2634,51 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
         {
             int oy;
             for (oy = 0; oy < outH; ++oy) {
-                int sy = (int)((long)oy * cv.h / outH);
-                int scy = sy / cv.cellH;
-                const char *crow = crop + (size_t)scy * cw;
-                const unsigned char *frow = colframes + fbytes * (size_t)i + (size_t)(minr + scy) * cols + minc;
+                int y0 = (int)((long)oy * cv.h / outH);
+                int y1 = (int)((long)(oy + 1) * cv.h / outH);
                 int ox;
+                if (y1 <= y0) y1 = y0 + 1;
+                if (y1 > cv.h) y1 = cv.h;
                 for (ox = 0; ox < outW; ++ox) {
-                    int sx = (int)((long)ox * cv.w / outW);
-                    int scx = sx / cv.cellW;
-                    int level = g_ramp_rev[(unsigned char)crow[scx]];
-                    int col = frow[scx];
-                    unsigned m = cv.bits[((size_t)sy * cv.w + sx) * 4 + 2];
+                    int x0 = (int)((long)ox * cv.w / outW);
+                    int x1 = (int)((long)(ox + 1) * cv.w / outW);
+                    unsigned sum = 0, cnt = 0, best = 0;
+                    int bsy = y0, bsx = x0, sy, sx;
                     size_t pi = (size_t)oy * outW + ox;
+                    int scy, scx, level, col;
+                    if (x1 <= x0) x1 = x0 + 1;
+                    if (x1 > cv.w) x1 = cv.w;
+                    for (sy = y0; sy < y1; ++sy) {
+                        const unsigned char *bits = cv.bits + ((size_t)sy * cv.w) * 4;
+                        for (sx = x0; sx < x1; ++sx) {
+                            unsigned m = bits[(size_t)sx * 4 + 2];
+                            sum += m; ++cnt;
+                            if (m > best) { best = m; bsy = sy; bsx = sx; }
+                        }
+                    }
+                    if (cnt == 0) { idx[pi] = 0; continue; }
+                    sum /= cnt;                    /* box-averaged coverage */
+                    scy = bsy / cv.cellH;
+                    scx = bsx / cv.cellW;
+                    level = g_ramp_rev[(unsigned char)crop[(size_t)scy * cw + scx]];
+                    col = colframes[fbytes * (size_t)i + (size_t)(minr + scy) * cols + minc + scx];
                     if (level < 0) level = 0;
-                    if (level <= 0 || m < 64) idx[pi] = 0;
-                    else if (apng) idx[pi] = (unsigned char)(m >= 192 ? apng255c[col] : apng128c[col]);
-                    else           idx[pi] = (m >= 128) ? (unsigned char)gifmap256[col] : 0;
+                    if (level <= 0 || sum < 64) idx[pi] = 0;
+                    else if (apng) idx[pi] = (unsigned char)(sum >= 192 ? apng255c[col] : apng128c[col]);
+                    else           idx[pi] = (sum >= 128) ? (unsigned char)gifmap256[col] : 0;
                 }
             }
         }
-        if (apng) { if (!apng_frame(aw, idx, delay_num, delay_den)) break; }
-        else      { if (!gif_frame(gw, idx, delay_cs)) break; }
+        if (apng) {
+            if (!apng_frame(aw, idx, delay_num, delay_den)) break;
+        } else {
+            int prev = (int)(gif_cum * 100.0 + 0.5);
+            int dcs;
+            gif_cum += frame_dt;
+            dcs = (int)(gif_cum * 100.0 + 0.5) - prev;
+            if (dcs < 1) dcs = 1;
+            if (!gif_frame(gw, idx, dcs)) break;
+        }
         if ((i & 3) == 3) export_status(h_out, is_console, i + 1, NF);
     }
     g_angle = save_angle;

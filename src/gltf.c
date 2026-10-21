@@ -19,12 +19,6 @@
 #include <string.h>
 
 /* ----------------------------------------------------------------- helpers */
-static unsigned rd32(const unsigned char *p) {
-    return (unsigned)p[0] | ((unsigned)p[1] << 8) | ((unsigned)p[2] << 16) | ((unsigned)p[3] << 24);
-}
-static unsigned rd16(const unsigned char *p) {
-    return (unsigned)p[0] | ((unsigned)p[1] << 8);
-}
 
 static unsigned char *read_file_w(const wchar_t *path, size_t *out_len) {
     HANDLE h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,

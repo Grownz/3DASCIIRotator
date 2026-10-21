@@ -93,7 +93,7 @@ Prebuilt Windows x64 binaries are on the
 
 - Windows 10 or newer (x64). Windows Terminal or the classic console both work
   (ANSI/VT escape sequences must be supported).
-- The prebuilt binary is compiled for **AVX2** (Haswell 2013 or newer) and
+- The prebuilt binary is compiled for **AVX** (Sandy Bridge 2011 or newer) and
   multi-threaded; rendering uses all available cores.
 - **Webcam mode** additionally needs a camera; on Windows 10/11, allow camera
   access for desktop apps (Settings → Privacy → Camera).
@@ -345,7 +345,7 @@ loaded at runtime from the `models/` folder.
 
 ## Versioning
 
-Current version: **0.2.26**. See [changelog.md](changelog.md) for details.
+Current version: **0.2.27**. See [changelog.md](changelog.md) for details.
 
 Each entry on the [releases page](https://github.com/Grownz/3DASCIIRotator/releases)
 uses the same note format: a one-line summary, a short labelled list of the

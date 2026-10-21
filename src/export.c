@@ -2,8 +2,9 @@
  * export.c - streaming animated GIF and APNG writers, no external libraries.
  *
  *  - GIF: 256-entry palette (index 0 = transparent), LZW compressed.
- *  - APNG: RGBA8 truecolour, each frame deflate-compressed with fixed Huffman
- *    codes and an LZ77 matcher (zlib wrapper + Adler-32).
+ *  - APNG: palette PNG (colour type 3) with tRNS alpha levels; each frame is
+ *    deflate-compressed with fixed Huffman codes and an LZ77 matcher
+ *    (zlib wrapper + Adler-32).
  *
  * Frames are streamed one at a time so nothing large is held in memory.
  * ==========================================================================*/

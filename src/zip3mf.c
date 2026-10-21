@@ -18,12 +18,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static unsigned rd32(const unsigned char *p) {
-    return (unsigned)p[0] | ((unsigned)p[1] << 8) | ((unsigned)p[2] << 16) | ((unsigned)p[3] << 24);
-}
-static unsigned rd16(const unsigned char *p) {
-    return (unsigned)p[0] | ((unsigned)p[1] << 8);
-}
 
 /* --------------------------------------------------------------- ZIP part */
 static unsigned char *zip_extract(const unsigned char *b, size_t n, const char *suffix, size_t *outlen) {

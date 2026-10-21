@@ -5,6 +5,7 @@ REM Produces build\ascii3D.exe.  Requires Visual Studio / Build Tools with the
 REM MSVC C compiler and the Windows SDK.
 REM ---------------------------------------------------------------------------
 setlocal
+cd /d "%~dp0"
 
 set "APP=ascii3D"
 
@@ -28,12 +29,18 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if not exist build mkdir build
+if not exist build\ md build
+if not exist build\ (
+  echo [error] Cannot create the build directory.
+  exit /b 1
+)
 
-cl /nologo /O2 /W4 /TC /fp:fast /GL /Oi /Ob3 /arch:AVX2 ^
+cl /nologo /O2 /W4 /WX /TC /fp:fast /GL /Oi /Ob3 /arch:AVX /Brepro ^
+   /Fd:build\vc.pdb ^
    src\main.c src\loader.c src\simplify.c src\export.c ^
    src\meshbuf.c src\gltf.c src\inflate.c src\zip3mf.c src\webcam.c src\fbx.c ^
-   /Fe:build\%APP%.exe /Fo:build\
+   /Fe:build\%APP%.exe /Fo:build\ ^
+   /link /PDB:build\%APP%.pdb
 if errorlevel 1 (
   echo [error] Build failed.
   exit /b 1

@@ -4,8 +4,8 @@
 #include <wchar.h>
 
 /* A parsed triangle mesh: verts is 3*nvert floats, tris is 3*ntri indices.
- * face_rgb is optional: 3 bytes (R,G,B) per triangle from an OBJ+MTL material,
- * or NULL when the format has no colours. */
+ * face_rgb is optional and, when present, exactly 3*ntri bytes (R,G,B per
+ * triangle) from a material-aware format, or NULL. */
 typedef struct {
     float         *verts;
     unsigned int  *tris;
@@ -13,9 +13,10 @@ typedef struct {
     int nvert, ntri;
 } RawMesh;
 
-/* Load a .stl / .obj / .ply file (format chosen by extension).
- * Returns 1 on success and fills *out (caller must free verts/tris with free()).
- * Returns 0 on failure and writes a short message to err. */
+/* Load a mesh file (format chosen by extension: .stl/.obj/.ply/.off/.gltf/
+ * .glb/.3mf/.fbx). Returns 1 on success and fills *out (caller must free
+ * verts/tris/face_rgb with free()). Returns 0 on failure and writes a short
+ * message to err. */
 int loader_load(const wchar_t *path, int max_tris, RawMesh *out, char *err, int errsz);
 
 /* Copies a short message into err (always NUL-terminated). */

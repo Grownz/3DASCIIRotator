@@ -54,6 +54,7 @@ static int g_com_inited;
 static IMFSourceReader *g_reader;
 static IMFMediaSource *g_source;
 static HANDLE g_thread;
+static HANDLE g_frame_evt;          /* signalled after each new frame */
 static volatile LONG g_stop;
 static CRITICAL_SECTION g_lock;
 static int g_lock_init;
@@ -75,17 +76,23 @@ static int getfn(HMODULE h, const char *name, void *dst) {
     return 1;
 }
 
+static void mf_unload(void) {
+    if (g_mfplat) { FreeLibrary(g_mfplat); g_mfplat = NULL; }
+    if (g_mfreadwrite) { FreeLibrary(g_mfreadwrite); g_mfreadwrite = NULL; }
+    if (g_mf) { FreeLibrary(g_mf); g_mf = NULL; }
+    if (g_ole32) { FreeLibrary(g_ole32); g_ole32 = NULL; }
+}
+
 static int mf_load(char *err, int errsz) {
     if (g_mf_loaded) return 1;
     g_mfplat = LoadLibraryA("mfplat.dll");
-    if (!g_mfplat) { werr(err, errsz, "mfplat.dll is not available"); return 0; }
+    if (!g_mfplat) { werr(err, errsz, "mfplat.dll is not available"); goto fail; }
     g_mfreadwrite = LoadLibraryA("mfreadwrite.dll");
-    if (!g_mfreadwrite) { werr(err, errsz, "mfreadwrite.dll is not available"); return 0; }
+    if (!g_mfreadwrite) { werr(err, errsz, "mfreadwrite.dll is not available"); goto fail; }
     g_mf = LoadLibraryA("mf.dll");
-    if (!g_mf) { werr(err, errsz, "mf.dll is not available"); return 0; }
+    if (!g_mf) { werr(err, errsz, "mf.dll is not available"); goto fail; }
     g_ole32 = LoadLibraryA("ole32.dll");
-    if (!g_ole32) g_ole32 = GetModuleHandleA("ole32.dll");
-    if (!g_ole32) { werr(err, errsz, "ole32.dll is not available"); return 0; }
+    if (!g_ole32) { werr(err, errsz, "ole32.dll is not available"); goto fail; }
     if (!getfn(g_mfplat, "MFStartup", &pMFStartup) ||
         !getfn(g_mfplat, "MFShutdown", &pMFShutdown) ||
         !getfn(g_mfplat, "MFCreateAttributes", &pMFCreateAttributes) ||
@@ -96,10 +103,14 @@ static int mf_load(char *err, int errsz) {
         !getfn(g_ole32, "CoUninitialize", &pCoUninitialize) ||
         !getfn(g_ole32, "CoTaskMemFree", &pCoTaskMemFree)) {
         werr(err, errsz, "Media Foundation entry points not found");
-        return 0;
+        goto fail;
     }
     g_mf_loaded = 1;
     return 1;
+
+fail:
+    mf_unload();
+    return 0;
 }
 
 static int mf_global_start(char *err, int errsz) {
@@ -250,6 +261,7 @@ static DWORD WINAPI capture_thread(LPVOID p) {
                             g_has_frame = 1;
                         }
                         LeaveCriticalSection(&g_lock);
+                        if (g_frame_evt) SetEvent(g_frame_evt);
                     } else {
                         buf->lpVtbl->Unlock(buf);
                     }
@@ -355,6 +367,7 @@ int webcam_start(int index, char *err, int errsz) {
 
     InitializeCriticalSection(&g_lock);
     g_lock_init = 1;
+    g_frame_evt = CreateEventW(NULL, FALSE, FALSE, NULL);
     g_has_frame = 0;
     g_locked = 0;
     g_stop = 0;
@@ -377,6 +390,7 @@ fail:
     if (g_thread) { InterlockedExchange(&g_stop, 1); WaitForSingleObject(g_thread, 2000); CloseHandle(g_thread); g_thread = NULL; }
     if (g_reader) { g_reader->lpVtbl->Release(g_reader); g_reader = NULL; }
     if (g_source) { g_source->lpVtbl->Release(g_source); g_source = NULL; }
+    if (g_frame_evt) { CloseHandle(g_frame_evt); g_frame_evt = NULL; }
     if (g_lock_init) { DeleteCriticalSection(&g_lock); g_lock_init = 0; }
     free(g_front); g_front = NULL;
     free(g_back);  g_back = NULL;
@@ -405,6 +419,7 @@ void webcam_stop(void) {
     }
     if (g_reader) { g_reader->lpVtbl->Release(g_reader); g_reader = NULL; }
     if (g_source) { g_source->lpVtbl->Release(g_source); g_source = NULL; }
+    if (g_frame_evt) { CloseHandle(g_frame_evt); g_frame_evt = NULL; }
     if (g_lock_init) { DeleteCriticalSection(&g_lock); g_lock_init = 0; }
     free(g_front); g_front = NULL;
     free(g_back);  g_back = NULL;
@@ -420,10 +435,17 @@ void webcam_global_shutdown(void) {
 }
 
 int webcam_wait(int ms) {
-    int waited = 0;
+    int ok, waited = 0;
     if (!g_started) return 0;
+    EnterCriticalSection(&g_lock);
+    ok = g_has_frame;
+    LeaveCriticalSection(&g_lock);
+    if (ok) return 1;
+    if (g_frame_evt) {
+        DWORD w = WaitForSingleObject(g_frame_evt, (DWORD)(ms < 0 ? 0 : ms));
+        return w == WAIT_OBJECT_0;
+    }
     for (;;) {
-        int ok;
         EnterCriticalSection(&g_lock);
         ok = g_has_frame;
         LeaveCriticalSection(&g_lock);

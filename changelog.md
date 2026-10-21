@@ -4,6 +4,19 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.27] - 2026-10-21
+
+### Changed
+- Polish: validated `--mesh`/`--light` values, NaN/Inf rejection, clamped
+  shatter debris, checked path conversions, a static model-scan buffer, and a
+  webcam frame event instead of polling.
+- The export's final downscale box-averages the glyph coverage, so thin
+  strokes survive.
+- Removed dead code (unused mesh fields, duplicate globals) and consolidated
+  the byte readers; the worker pool is joined on exit.
+- Build: runs from any directory and uses `/arch:AVX`, `/WX`, `/Brepro` and
+  PDBs under `build\`.
+
 ## [0.2.26] - 2026-10-21
 
 ### Changed

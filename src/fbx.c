@@ -21,15 +21,6 @@
 #include <string.h>
 
 /* --------------------------------------------------------------- utilities */
-static unsigned rd32(const unsigned char *p) {
-    return (unsigned)p[0] | ((unsigned)p[1] << 8) | ((unsigned)p[2] << 16) | ((unsigned)p[3] << 24);
-}
-static unsigned rd16(const unsigned char *p) {
-    return (unsigned)p[0] | ((unsigned)p[1] << 8);
-}
-static unsigned long long rd64(const unsigned char *p) {
-    return (unsigned long long)rd32(p) | ((unsigned long long)rd32(p + 4) << 32);
-}
 
 /* FBX array properties are zlib streams (RFC 1950): skip the 2-byte header and
  * inflate the raw DEFLATE payload. Fall back to raw DEFLATE if it is not a
