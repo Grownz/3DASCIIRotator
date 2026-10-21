@@ -252,7 +252,7 @@ static int read_prop(FR *r, FbxProp *pr, int keep) {
     return 1;
 }
 
-static int read_node(FR *r, FbxNode **out) {
+static int read_node(FR *r, FbxNode **out, int depth) {
     size_t start = r->pos;
     size_t hdr = r->wide ? 25 : 13;
     unsigned long long end, nprop;
@@ -261,6 +261,7 @@ static int read_node(FR *r, FbxNode **out) {
     unsigned i;
 
     *out = NULL;
+    if (depth > 128) return 0;
     if (start + hdr > r->n) return 0;
     if (++r->nodes > 2000000) return 0;
     {
@@ -300,7 +301,7 @@ static int read_node(FR *r, FbxNode **out) {
     }
     while (r->pos < (size_t)end) {
         FbxNode *kid = NULL;
-        if (!read_node(r, &kid)) break;            /* null record: children done */
+        if (!read_node(r, &kid, depth + 1)) break;  /* null record: children done */
         if (!node_addkid(nd, kid)) { node_free(kid); break; }
     }
     if (end > r->n) { node_free(nd); return 0; }
@@ -487,7 +488,7 @@ int fbx_load(const unsigned char *b, size_t n, int max_tris,
 
     for (;;) {
         FbxNode *nd = NULL;
-        if (!read_node(&r, &nd)) break;
+        if (!read_node(&r, &nd, 0)) break;
         if (ntop == captop) {
             int nc = captop ? captop * 2 : 8;
             FbxNode **np = (FbxNode **)realloc(tops, (size_t)nc * sizeof(FbxNode *));

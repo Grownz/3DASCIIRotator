@@ -4,6 +4,19 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.25] - 2026-10-21
+
+### Changed
+- Hardened the mesh readers: PLY grows its triangle buffer with the real count
+  and validates vertex indices and binary bounds; glTF rejects out-of-range
+  indices, bounds JSON nesting and caps node traversal; FBX bounds its node
+  recursion; ZIP/3MF checks entry sizes and directory bounds.
+- The animation export stores each frame's own colours and keeps the APNG
+  palette within 256 entries for many-coloured models.
+- The webcam shuts its media source down on stop and only frees resources once
+  the capture thread has exited; the sidecar read and model-name collision
+  handling are bounded.
+
 ## [0.2.24] - 2026-10-21
 
 ### Changed

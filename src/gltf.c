@@ -173,15 +173,15 @@ static char *jstring(JP *p) {
     return o;
 }
 
-static JVal *jvalue(JP *p);
+static JVal *jvalue(JP *p, int depth);
 
-static JVal *jarray(JP *p) {
+static JVal *jarray(JP *p, int depth) {
     JVal *v = jnew(J_ARR);
     ++p->s;                       /* '[' */
     jws(p);
     if (p->s < p->e && *p->s == ']') { ++p->s; return v; }
     for (;;) {
-        JVal *it = jvalue(p);
+        JVal *it = jvalue(p, depth + 1);
         if (!it) { jfree(v); return NULL; }
         jadd(v, NULL, it);
         jws(p);
@@ -192,7 +192,7 @@ static JVal *jarray(JP *p) {
     return v;
 }
 
-static JVal *jobject(JP *p) {
+static JVal *jobject(JP *p, int depth) {
     JVal *v = jnew(J_OBJ);
     ++p->s;                       /* '{' */
     jws(p);
@@ -204,7 +204,7 @@ static JVal *jobject(JP *p) {
         jws(p);
         if (p->s >= p->e || *p->s != ':') { free(key); jfree(v); return NULL; }
         ++p->s; jws(p);
-        it = jvalue(p);
+        it = jvalue(p, depth + 1);
         if (!it) { free(key); jfree(v); return NULL; }
         jadd(v, key, it);
         jws(p);
@@ -215,12 +215,13 @@ static JVal *jobject(JP *p) {
     return v;
 }
 
-static JVal *jvalue(JP *p) {
+static JVal *jvalue(JP *p, int depth) {
+    if (depth > 128) return NULL;
     jws(p);
     if (p->s >= p->e) return NULL;
     switch (*p->s) {
-    case '{': return jobject(p);
-    case '[': return jarray(p);
+    case '{': return jobject(p, depth);
+    case '[': return jarray(p, depth);
     case '"': { JVal *v = jnew(J_STR); v->str = jstring(p); if (!v->str) { jfree(v); return NULL; } return v; }
     case 't': if (p->e - p->s >= 4 && !strncmp(p->s, "true", 4)) { JVal *v = jnew(J_BOOL); v->boolean = 1; p->s += 4; return v; } return NULL;
     case 'f': if (p->e - p->s >= 5 && !strncmp(p->s, "false", 5)) { JVal *v = jnew(J_BOOL); v->boolean = 0; p->s += 5; return v; } return NULL;
@@ -407,6 +408,7 @@ typedef struct {
     IVec *T;
     CVec *F;
     int   max_tris;
+    long  budget;      /* node-visit budget (guards against DAG explosions) */
 } Gctx;
 
 static void emit_primitive(Gctx *g, JVal *prim, const double *world, const unsigned char *rgb) {
@@ -441,7 +443,7 @@ static void emit_primitive(Gctx *g, JVal *prim, const double *world, const unsig
     if (idx && icount >= 3) {
         for (i = 0; i + 2 < icount; i += 3) {
             unsigned int a = idx[i], b = idx[i + 1], c = idx[i + 2];
-            if ((int)a >= pcount || (int)b >= pcount || (int)c >= pcount) continue;
+            if (a >= (unsigned)pcount || b >= (unsigned)pcount || c >= (unsigned)pcount) continue;
             if (!ipush(g->T, (unsigned)(base + a)) || !ipush(g->T, (unsigned)(base + b)) || !ipush(g->T, (unsigned)(base + c))) break;
             if (rgb) { cpush(g->F, rgb[0]); cpush(g->F, rgb[1]); cpush(g->F, rgb[2]); }
             if (g->T->n / 3 > g->max_tris) break;
@@ -479,6 +481,7 @@ static void walk_node(Gctx *g, JVal *nodes, int node_idx, const double *parent, 
     int i;
 
     if (!node || depth > 64) return;
+    if (--g->budget < 0) return;
     {
         JVal *mat = jget(node, "matrix");
         if (mat && mat->type == J_ARR && mat->n >= 16) {
@@ -554,7 +557,7 @@ int gltf_load(const unsigned char *b, size_t n, const wchar_t *path,
     if (!json) { seterr(err, errsz, "not a glTF/GLB file"); return 0; }
 
     p.s = json; p.e = json + jsonlen;
-    root = jvalue(&p);
+    root = jvalue(&p, 0);
     if (!root || root->type != J_OBJ) { jfree(root); seterr(err, errsz, "bad glTF JSON"); return 0; }
 
     memset(bufs, 0, sizeof(bufs));
@@ -599,6 +602,7 @@ int gltf_load(const unsigned char *b, size_t n, const wchar_t *path,
     }
 
     g.root = root; g.bufs = bufs; g.nb = nb; g.V = &V; g.T = &T; g.F = &F; g.max_tris = max_tris;
+    { JVal *nn = jget(root, "nodes"); g.budget = (long)(nn && nn->type == J_ARR ? nn->n : 0) * 32 + 1024; }
     mat4_ident(ident);
     nodes = jget(root, "nodes");
     scenes = jget(root, "scenes");

@@ -52,6 +52,7 @@ static int g_com_inited;
 
 /* ------------------------------------------------------------- capture state */
 static IMFSourceReader *g_reader;
+static IMFMediaSource *g_source;
 static HANDLE g_thread;
 static volatile LONG g_stop;
 static CRITICAL_SECTION g_lock;
@@ -264,7 +265,7 @@ int webcam_start(int index, char *err, int errsz) {
     if (!mf_global_start(err, errsz)) return 0;
     if (FAILED(enum_devices(&devs, &count)) || count == 0) {
         werr(err, errsz, "no camera found");
-        return 0;
+        goto fail;
     }
     if (index < 0 || index >= (int)count) index = 0;
 
@@ -349,17 +350,18 @@ int webcam_start(int index, char *err, int errsz) {
         goto fail;
     }
 
+    g_source = source;          /* kept so webcam_stop() can call Shutdown() */
     g_started = 1;
     for (i = 0; i < (int)count; ++i) devs[i]->lpVtbl->Release(devs[i]);
     pCoTaskMemFree(devs);
     if (rattr) rattr->lpVtbl->Release(rattr);
     if (cur) cur->lpVtbl->Release(cur);
-    if (source) source->lpVtbl->Release(source);
     return 1;
 
 fail:
     if (g_thread) { InterlockedExchange(&g_stop, 1); WaitForSingleObject(g_thread, 2000); CloseHandle(g_thread); g_thread = NULL; }
     if (g_reader) { g_reader->lpVtbl->Release(g_reader); g_reader = NULL; }
+    if (g_source) { g_source->lpVtbl->Release(g_source); g_source = NULL; }
     if (g_lock_init) { DeleteCriticalSection(&g_lock); g_lock_init = 0; }
     free(g_front); g_front = NULL;
     free(g_back);  g_back = NULL;
@@ -372,10 +374,22 @@ fail:
 }
 
 void webcam_stop(void) {
+    DWORD w;
     if (!g_started) return;
     InterlockedExchange(&g_stop, 1);
-    if (g_thread) { WaitForSingleObject(g_thread, 3000); CloseHandle(g_thread); g_thread = NULL; }
+    if (g_source) g_source->lpVtbl->Shutdown(g_source);   /* abort a pending ReadSample */
+    if (g_thread) {
+        w = WaitForSingleObject(g_thread, 5000);
+        if (w != WAIT_OBJECT_0) {
+            /* The capture thread is stuck; do not free resources it may still use. */
+            g_started = 0;
+            return;
+        }
+        CloseHandle(g_thread);
+        g_thread = NULL;
+    }
     if (g_reader) { g_reader->lpVtbl->Release(g_reader); g_reader = NULL; }
+    if (g_source) { g_source->lpVtbl->Release(g_source); g_source = NULL; }
     if (g_lock_init) { DeleteCriticalSection(&g_lock); g_lock_init = 0; }
     free(g_front); g_front = NULL;
     free(g_back);  g_back = NULL;

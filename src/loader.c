@@ -430,69 +430,111 @@ static int parse_ply(const unsigned char *b, size_t n, int max_tris,
     out->nvert = vcount;
     out->ntri = 0;
     out->verts = (float *)malloc(sizeof(float) * 3 * (size_t)vcount);
-    out->tris = (unsigned int *)malloc(sizeof(unsigned int) * 3 * (size_t)fcount);
-    if (!out->verts || !out->tris) { seterr(err, errsz, "out of memory"); return 0; }
+    out->tris = NULL;
+    if (!out->verts) { seterr(err, errsz, "out of memory"); return 0; }
 
-    if (ascii) {
-        const char *s = data;
-        int i, k;
-        for (i = 0; i < vcount; ++i) {
-            float xyz[3] = {0, 0, 0};
-            for (k = 0; k < vn; ++k) {
-                char *end;
-                float val = strtof(s, &end);
-                s = end;
-                if (k == vx) xyz[0] = val;
-                else if (k == vy) xyz[1] = val;
-                else if (k == vz) xyz[2] = val;
+    {
+        IVec T = {0};
+        const unsigned char *data_end = b + n;
+
+        if (ascii) {
+            const char *s = data;
+            const char *send = (const char *)data_end;
+            int i, k;
+            for (i = 0; i < vcount; ++i) {
+                float xyz[3] = {0, 0, 0};
+                for (k = 0; k < vn; ++k) {
+                    char *end;
+                    float val;
+                    if (s >= send) { seterr(err, errsz, "truncated PLY"); goto ply_fail; }
+                    val = strtof(s, &end);
+                    if (end == s) { seterr(err, errsz, "bad PLY data"); goto ply_fail; }
+                    s = end;
+                    if (k == vx) xyz[0] = val;
+                    else if (k == vy) xyz[1] = val;
+                    else if (k == vz) xyz[2] = val;
+                }
+                out->verts[i * 3 + 0] = xyz[0];
+                out->verts[i * 3 + 1] = xyz[1];
+                out->verts[i * 3 + 2] = xyz[2];
             }
-            out->verts[i * 3 + 0] = xyz[0];
-            out->verts[i * 3 + 1] = xyz[1];
-            out->verts[i * 3 + 2] = xyz[2];
-        }
-        for (i = 0; i < fcount; ++i) {
-            char *end;
-            long c = strtol(s, &end, 10);
-            unsigned int idx[64];
-            s = end;
-            if (c > 64) c = 64;
-            for (k = 0; k < c; ++k) { idx[k] = (unsigned int)strtol(s, &end, 10); s = end; }
-            for (k = 2; k < c; ++k) {
-                out->tris[out->ntri * 3 + 0] = idx[0];
-                out->tris[out->ntri * 3 + 1] = idx[k - 1];
-                out->tris[out->ntri * 3 + 2] = idx[k];
-                ++out->ntri;
-            }
-        }
-    } else {
-        const unsigned char *p = (const unsigned char *)data;
-        int i;
-        for (i = 0; i < vcount; ++i) {
-            const unsigned char *rec = p + (size_t)i * vstride;
-            out->verts[i * 3 + 0] = (float)ply_bin_value(rec + xoff, vtype[vx]);
-            out->verts[i * 3 + 1] = (float)ply_bin_value(rec + yoff, vtype[vy]);
-            out->verts[i * 3 + 2] = (float)ply_bin_value(rec + zoff, vtype[vz]);
-        }
-        p += (size_t)vcount * vstride;
-        {
-            int cts = ply_type_size(fctype), its = ply_type_size(fittype);
             for (i = 0; i < fcount; ++i) {
-                int c = (int)ply_bin_value(p, fctype); p += cts;
-                unsigned int idx[64];
-                int k;
-                if (c > 64) c = 64;
-                for (k = 0; k < c; ++k) { idx[k] = (unsigned int)ply_bin_value(p, fittype); p += its; }
+                char *end;
+                long c;
+                unsigned int idx[256];
+                int valid = 1;
+                if (s >= send) { seterr(err, errsz, "truncated PLY"); goto ply_fail; }
+                c = strtol(s, &end, 10);
+                if (end == s || c < 0) { seterr(err, errsz, "bad PLY face"); goto ply_fail; }
+                s = end;
+                if (c > 256) { seterr(err, errsz, "PLY polygon too large"); goto ply_fail; }
+                for (k = 0; k < (int)c; ++k) {
+                    long v;
+                    if (s >= send) { seterr(err, errsz, "truncated PLY"); goto ply_fail; }
+                    v = strtol(s, &end, 10);
+                    if (end == s) { seterr(err, errsz, "bad PLY index"); goto ply_fail; }
+                    s = end;
+                    if (v < 0 || v >= vcount) valid = 0;
+                    idx[k] = (unsigned int)v;
+                }
+                if (!valid || c < 3) continue;
+                for (k = 2; k < (int)c; ++k) {
+                    if (T.n / 3 >= max_tris) { seterr(err, errsz, "too many triangles"); goto ply_fail; }
+                    if (!ipush(&T, idx[0]) || !ipush(&T, idx[k - 1]) || !ipush(&T, idx[k])) {
+                        seterr(err, errsz, "out of memory"); goto ply_fail;
+                    }
+                }
+            }
+        } else {
+            const unsigned char *p = (const unsigned char *)data;
+            int i;
+            int cts = ply_type_size(fctype), its = ply_type_size(fittype);
+            if (cts <= 0 || its <= 0 || vstride <= 0) { seterr(err, errsz, "bad PLY layout"); goto ply_fail; }
+            if ((size_t)vcount > (size_t)(data_end - p) / (size_t)vstride) {
+                seterr(err, errsz, "truncated PLY"); goto ply_fail;
+            }
+            for (i = 0; i < vcount; ++i) {
+                const unsigned char *rec = p + (size_t)i * (size_t)vstride;
+                out->verts[i * 3 + 0] = (float)ply_bin_value(rec + xoff, vtype[vx]);
+                out->verts[i * 3 + 1] = (float)ply_bin_value(rec + yoff, vtype[vy]);
+                out->verts[i * 3 + 2] = (float)ply_bin_value(rec + zoff, vtype[vz]);
+            }
+            p += (size_t)vcount * (size_t)vstride;
+            for (i = 0; i < fcount; ++i) {
+                int c, k, valid = 1;
+                unsigned int idx[256];
+                if (p + cts > data_end) { seterr(err, errsz, "truncated PLY"); goto ply_fail; }
+                c = (int)ply_bin_value(p, fctype); p += cts;
+                if (c < 0 || c > 256) { seterr(err, errsz, "bad PLY face"); goto ply_fail; }
+                if ((size_t)c > (size_t)(data_end - p) / (size_t)its) {
+                    seterr(err, errsz, "truncated PLY"); goto ply_fail;
+                }
+                for (k = 0; k < c; ++k) {
+                    long v = (long)ply_bin_value(p, fittype);
+                    p += its;
+                    if (v < 0 || v >= vcount) valid = 0;
+                    idx[k] = (unsigned int)v;
+                }
+                if (!valid || c < 3) continue;
                 for (k = 2; k < c; ++k) {
-                    out->tris[out->ntri * 3 + 0] = idx[0];
-                    out->tris[out->ntri * 3 + 1] = idx[k - 1];
-                    out->tris[out->ntri * 3 + 2] = idx[k];
-                    ++out->ntri;
+                    if (T.n / 3 >= max_tris) { seterr(err, errsz, "too many triangles"); goto ply_fail; }
+                    if (!ipush(&T, idx[0]) || !ipush(&T, idx[k - 1]) || !ipush(&T, idx[k])) {
+                        seterr(err, errsz, "out of memory"); goto ply_fail;
+                    }
                 }
             }
         }
+
+        if (T.n == 0) { seterr(err, errsz, "no triangles"); goto ply_fail; }
+        out->tris = T.p;
+        out->ntri = T.n / 3;
+        return 1;
+
+    ply_fail:
+        ifree(&T);
+        free(out->verts); out->verts = NULL;
+        return 0;
     }
-    if (out->ntri == 0) { seterr(err, errsz, "no triangles"); return 0; }
-    return 1;
 }
 
 /* --------------------------------------------------------------- dispatch */

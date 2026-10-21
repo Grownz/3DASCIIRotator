@@ -52,17 +52,19 @@ static unsigned char *zip_extract(const unsigned char *b, size_t n, const char *
         extralen = rd16(b + cd_pos + 30);
         commentlen = rd16(b + cd_pos + 32);
         lho = rd32(b + cd_pos + 42);
+        if ((size_t)cd_pos + 46 + (size_t)fnlen + extralen + commentlen > n) return NULL;
         name = (const char *)(b + cd_pos + 46);
         nl = fnlen;
         if (nl >= sl && _strnicmp(name + nl - sl, suffix, sl) == 0) {
             /* local header */
             unsigned lfn, lex;
             const unsigned char *data;
-            if (lho + 30 > n || rd32(b + lho) != 0x04034b50u) return NULL;
+            if ((size_t)lho + 30 > n || rd32(b + lho) != 0x04034b50u) return NULL;
             lfn = rd16(b + lho + 26);
             lex = rd16(b + lho + 28);
-            data = b + lho + 30 + lfn + lex;
-            if (lho + 30 + lfn + lex + csize > n) return NULL;
+            if ((size_t)lho + 30 + (size_t)lfn + lex > n) return NULL;
+            data = b + (size_t)lho + 30 + lfn + lex;
+            if ((unsigned long long)csize > (unsigned long long)(n - (size_t)(data - b))) return NULL;
             if (method == 0) {
                 unsigned char *o = (unsigned char *)malloc(csize + 1);
                 if (!o) return NULL;
