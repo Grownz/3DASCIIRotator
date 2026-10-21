@@ -86,8 +86,29 @@ static unsigned char *zip_extract(const unsigned char *b, size_t n, const char *
 static const char *next_tag(const char *s, const char *e, char *name, int nsz,
                             char *attrs, int asz, int *closing) {
     const char *t;
-    while (s < e && *s != '<') ++s;
-    if (s >= e) return NULL;
+    for (;;) {
+        while (s < e && *s != '<') ++s;
+        if (s >= e) return NULL;
+        if (e - s >= 4 && !strncmp(s, "<!--", 4)) {
+            const char *q = strstr(s + 4, "-->");
+            if (!q) return NULL;
+            s = q + 3;
+            continue;
+        }
+        if (e - s >= 9 && !strncmp(s, "<![CDATA[", 9)) {
+            const char *q = strstr(s + 9, "]]>");
+            if (!q) return NULL;
+            s = q + 3;
+            continue;
+        }
+        if (e - s >= 2 && s[1] == '?') {
+            const char *q = strstr(s + 2, "?>");
+            if (!q) return NULL;
+            s = q + 2;
+            continue;
+        }
+        break;
+    }
     t = s + 1;
     *closing = 0;
     if (t < e && *t == '/') { *closing = 1; ++t; }
@@ -147,12 +168,16 @@ static int attr_int(const char *attrs, const char *key, int *out) {
 #define MF3_MAXMAT 128
 #define MF3_MAXCOL 64
 
+typedef struct { int objid, has; double m[12]; } Mf3Comp;
+
 typedef struct {
     int id, used;
     FVec V;
     IVec T;
     IVec Mp, Mi;      /* per-triangle material id + index */
     int defpid, defp1;
+    Mf3Comp comp[8];
+    int ncomp;
 } Mf3Obj;
 
 typedef struct {
@@ -162,6 +187,87 @@ typedef struct {
 
 typedef struct { int objid, has; double m[12]; } Mf3Item;
 
+/* Compose two 3MF 4x3 transforms: result = a * b (row-vector convention). */
+static void mf3_mul(const double *a, const double *b, double *o) {
+    int r, c, k;
+    for (r = 0; r < 4; ++r) {
+        for (c = 0; c < 3; ++c) {
+            double sum = 0.0;
+            for (k = 0; k < 3; ++k) sum += a[r * 3 + k] * b[k * 3 + c];
+            if (r == 3) sum += b[9 + c];
+            o[r * 3 + c] = sum;
+        }
+    }
+}
+
+/* Emit one object's mesh. 0 = OOM, 2 = triangle cap, 1 = ok. */
+static int mf3_emit_mesh(Mf3Obj *o, const double *m, int hasm,
+                         Mf3Mat *mats, int nmat,
+                         FVec *V, IVec *T, CVec *F, int max_tris) {
+    int base, vi, ti, k;
+    if (!o || o->V.n < 3 || o->T.n < 3) return 1;
+    base = V->n / 3;
+    for (vi = 0; vi < o->V.n / 3; ++vi) {
+        const float *p = &o->V.p[vi * 3];
+        float x, y, z;
+        if (hasm) {
+            x = (float)(p[0] * m[0] + p[1] * m[3] + p[2] * m[6] + m[9]);
+            y = (float)(p[0] * m[1] + p[1] * m[4] + p[2] * m[7] + m[10]);
+            z = (float)(p[0] * m[2] + p[1] * m[5] + p[2] * m[8] + m[11]);
+        } else { x = p[0]; y = p[1]; z = p[2]; }
+        if (!fpush(V, x) || !fpush(V, y) || !fpush(V, z)) return 0;
+    }
+    for (ti = 0; ti < o->T.n / 3; ++ti) {
+        unsigned a = o->T.p[ti * 3 + 0], b2 = o->T.p[ti * 3 + 1], c = o->T.p[ti * 3 + 2];
+        int pid = (int)o->Mp.p[ti], p1 = (int)o->Mi.p[ti];
+        unsigned char rgb[3] = { 200, 200, 200 };
+        if (pid < 0) { pid = o->defpid; p1 = o->defp1; }
+        if (pid > 0) {
+            for (k = 0; k < nmat; ++k) {
+                if (mats[k].id == pid && p1 >= 0 && p1 < mats[k].n) {
+                    rgb[0] = mats[k].col[p1 * 3 + 0];
+                    rgb[1] = mats[k].col[p1 * 3 + 1];
+                    rgb[2] = mats[k].col[p1 * 3 + 2];
+                    break;
+                }
+            }
+        }
+        if ((int)a >= o->V.n / 3 || (int)b2 >= o->V.n / 3 || (int)c >= o->V.n / 3) continue;
+        if (!ipush(T, (unsigned)(base + a)) || !ipush(T, (unsigned)(base + b2)) ||
+            !ipush(T, (unsigned)(base + c))) return 0;
+        if (!cpush(F, rgb[0]) || !cpush(F, rgb[1]) || !cpush(F, rgb[2])) return 0;
+        if (T->n / 3 > max_tris) return 2;
+    }
+    return 1;
+}
+
+static int mf3_emit_obj(Mf3Obj *objs, int nobj, Mf3Obj *o, const double *m, int hasm,
+                        Mf3Mat *mats, int nmat, FVec *V, IVec *T, CVec *F,
+                        int max_tris, int depth) {
+    int k, rc;
+    if (!o || depth > 16) return 1;
+    rc = mf3_emit_mesh(o, m, hasm, mats, nmat, V, T, F, max_tris);
+    if (rc != 1) return rc;
+    for (k = 0; k < o->ncomp; ++k) {
+        Mf3Obj *co = NULL;
+        double cm[12];
+        int chasm = 0, j;
+        for (j = 0; j < nobj; ++j) if (objs[j].id == o->comp[k].objid) { co = &objs[j]; break; }
+        if (!co) continue;
+        if (o->comp[k].has) {
+            if (hasm) mf3_mul(o->comp[k].m, m, cm);
+            else { for (j = 0; j < 12; ++j) cm[j] = o->comp[k].m[j]; }
+            chasm = 1;
+        } else if (hasm) {
+            for (j = 0; j < 12; ++j) cm[j] = m[j];
+            chasm = 1;
+        }
+        rc = mf3_emit_obj(objs, nobj, co, cm, chasm, mats, nmat, V, T, F, max_tris, depth + 1);
+        if (rc != 1) return rc;
+    }
+    return 1;
+}
+
 int mf3_load(const unsigned char *b, size_t n, int max_tris,
              RawMesh *out, char *err, int errsz) {
     unsigned char *xml;
@@ -169,8 +275,7 @@ int mf3_load(const unsigned char *b, size_t n, int max_tris,
     const char *s, *e;
     Mf3Obj objs[MF3_MAXOBJ];
     Mf3Mat mats[MF3_MAXMAT];
-    Mf3Item items[256];
-    int nobj = 0, nmat = 0, nitem = 0;
+    Mf3Item items[256];    int nobj = 0, nmat = 0, nitem = 0;
     Mf3Obj *cur = NULL;
     Mf3Mat *curmat = NULL;
     FVec V = {0};
@@ -195,6 +300,8 @@ int mf3_load(const unsigned char *b, size_t n, int max_tris,
                     curmat->id = 0; curmat->n = 0; curmat->used = 1;
                     attr_int(attrs, "id", &curmat->id);
                     ++nmat;
+                } else {
+                    curmat = NULL;
                 }
             } else if (!strcmp(name, "base")) {
                 if (curmat && curmat->n < MF3_MAXCOL) {
@@ -217,6 +324,8 @@ int mf3_load(const unsigned char *b, size_t n, int max_tris,
                     attr_int(attrs, "pid", &cur->defpid);
                     attr_int(attrs, "pindex", &cur->defp1);
                     ++nobj;
+                } else {
+                    cur = NULL;
                 }
             } else if (!strcmp(name, "vertex")) {
                 double x = 0, y = 0, z = 0;
@@ -235,6 +344,21 @@ int mf3_load(const unsigned char *b, size_t n, int max_tris,
                         ipush(&cur->Mp, (unsigned)pid);
                         ipush(&cur->Mi, (unsigned)p1);
                     }
+                }
+            } else if (!strcmp(name, "component")) {
+                if (cur && cur->ncomp < 8) {
+                    char tr[512];
+                    Mf3Comp *cp = &cur->comp[cur->ncomp];
+                    cp->objid = 0; cp->has = 0;
+                    attr_int(attrs, "objectid", &cp->objid);
+                    if (attr_str(attrs, "transform", tr, sizeof(tr))) {
+                        double m[12];
+                        int got = sscanf(tr, "%lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf %lf",
+                                         &m[0], &m[1], &m[2], &m[3], &m[4], &m[5],
+                                         &m[6], &m[7], &m[8], &m[9], &m[10], &m[11]);
+                        if (got == 12) { int j; for (j = 0; j < 12; ++j) cp->m[j] = m[j]; cp->has = 1; }
+                    }
+                    cur->ncomp++;
                 }
             } else if (!strcmp(name, "item")) {
                 if (nitem < 256) {
@@ -263,11 +387,11 @@ int mf3_load(const unsigned char *b, size_t n, int max_tris,
     /* emit objects (via build items, or all if there are none) */
     {
         int total_items = nitem > 0 ? nitem : nobj;
-        for (i = 0; i < total_items; ++i) {
+        int rc = 1;
+        for (i = 0; i < total_items && rc == 1; ++i) {
             Mf3Obj *o;
             double m[12];
             int hasm;
-            int base, vi, ti;
             if (nitem > 0) {
                 o = NULL;
                 for (k = 0; k < nobj; ++k) if (objs[k].id == items[i].objid) { o = &objs[k]; break; }
@@ -276,39 +400,10 @@ int mf3_load(const unsigned char *b, size_t n, int max_tris,
             } else {
                 o = &objs[i];
                 hasm = 0;
+                for (k = 0; k < 12; ++k) m[k] = 0.0;
             }
-            if (!o || o->V.n < 3 || o->T.n < 3) continue;
-            base = V.n / 3;
-            for (vi = 0; vi < o->V.n / 3; ++vi) {
-                const float *p = &o->V.p[vi * 3];
-                float x, y, z;
-                if (hasm) {
-                    x = (float)(p[0] * m[0] + p[1] * m[3] + p[2] * m[6] + m[9]);
-                    y = (float)(p[0] * m[1] + p[1] * m[4] + p[2] * m[7] + m[10]);
-                    z = (float)(p[0] * m[2] + p[1] * m[5] + p[2] * m[8] + m[11]);
-                } else { x = p[0]; y = p[1]; z = p[2]; }
-                fpush(&V, x); fpush(&V, y); fpush(&V, z);
-            }
-            for (ti = 0; ti < o->T.n / 3; ++ti) {
-                unsigned a = o->T.p[ti * 3 + 0], b2 = o->T.p[ti * 3 + 1], c = o->T.p[ti * 3 + 2];
-                int pid = (int)o->Mp.p[ti], p1 = (int)o->Mi.p[ti];
-                unsigned char rgb[3] = { 200, 200, 200 };
-                if (pid < 0) { pid = o->defpid; p1 = o->defp1; }
-                if (pid > 0) {
-                    for (k = 0; k < nmat; ++k) {
-                        if (mats[k].id == pid && p1 >= 0 && p1 < mats[k].n) {
-                            rgb[0] = mats[k].col[p1 * 3 + 0];
-                            rgb[1] = mats[k].col[p1 * 3 + 1];
-                            rgb[2] = mats[k].col[p1 * 3 + 2];
-                            break;
-                        }
-                    }
-                }
-                if ((int)a >= o->V.n / 3 || (int)b2 >= o->V.n / 3 || (int)c >= o->V.n / 3) continue;
-                ipush(&T, (unsigned)(base + a)); ipush(&T, (unsigned)(base + b2)); ipush(&T, (unsigned)(base + c));
-                cpush(&F, rgb[0]); cpush(&F, rgb[1]); cpush(&F, rgb[2]);
-                if (T.n / 3 > max_tris) break;
-            }
+            if (!o) continue;
+            rc = mf3_emit_obj(objs, nobj, o, m, hasm, mats, nmat, &V, &T, &F, max_tris, 0);
         }
     }
 

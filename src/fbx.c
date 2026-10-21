@@ -463,6 +463,24 @@ typedef struct {
     unsigned char rgb[3];
 } FbxMat;
 
+/* World transform: compose the local transform with its Model parents. */
+static M4 model_world_rec(FbxObj *models, int nmodel, const long long *parent_id,
+                          int idx, M4 *memo, char *done, int depth) {
+    int p = -1, m;
+    if (!done[idx]) {
+        M4 local = model_transform(models[idx].node);
+        if (depth <= 64 && parent_id[idx]) {
+            for (m = 0; m < nmodel; ++m)
+                if (models[m].id == parent_id[idx]) { p = m; break; }
+        }
+        memo[idx] = (p >= 0 && p != idx)
+                  ? m4_mul(model_world_rec(models, nmodel, parent_id, p, memo, done, depth + 1), local)
+                  : local;
+        done[idx] = 1;
+    }
+    return memo[idx];
+}
+
 int fbx_load(const unsigned char *b, size_t n, int max_tris,
              RawMesh *out, char *err, int errsz) {
     FR r;
@@ -472,6 +490,9 @@ int fbx_load(const unsigned char *b, size_t n, int max_tris,
     FbxObj *geos = NULL, *models = NULL;
     FbxMat *mats = NULL;
     int ngeo = 0, capgeo = 0, nmodel = 0, capmodel = 0, nmat = 0, capmat = 0;
+    long long *parent_id = NULL;
+    M4 *memo = NULL;
+    char *done = NULL;
     FVec V = {0};
     IVec T = {0};
     CVec F = {0};
@@ -558,6 +579,29 @@ int fbx_load(const unsigned char *b, size_t n, int max_tris,
         }
     }
 
+    /* model parent graph (for composed transforms) */
+    if (nmodel > 0) {
+        int j, m;
+        parent_id = (long long *)calloc((size_t)nmodel, sizeof(long long));
+        memo = (M4 *)malloc(sizeof(M4) * (size_t)nmodel);
+        done = (char *)calloc((size_t)nmodel, 1);
+        if (!parent_id || !memo || !done) { seterr(err, errsz, "out of memory"); goto fail; }
+        if (conns) {
+            for (j = 0; j < conns->nkid; ++j) {
+                FbxNode *c = conns->kids[j];
+                long long child, parent;
+                int ci = -1, pi = -1;
+                if (strcmp(c->name, "C") || strcmp(prop_s(c, 0), "OO")) continue;
+                child = prop_i(c, 1); parent = prop_i(c, 2);
+                for (m = 0; m < nmodel; ++m) {
+                    if (models[m].id == child) ci = m;
+                    if (models[m].id == parent) pi = m;
+                }
+                if (ci >= 0 && pi >= 0 && ci != pi) parent_id[ci] = parent;
+            }
+        }
+    }
+
     /* emit every model that has a connected geometry */
     for (i = 0; i < nmodel; ++i) {
         FbxNode *geo = NULL;
@@ -593,7 +637,7 @@ int fbx_load(const unsigned char *b, size_t n, int max_tris,
         ni = ip->n;
         if (nv <= 0 || ni <= 0) continue;
 
-        xf = model_transform(models[i].node);
+        xf = model_world_rec(models, nmodel, parent_id, i, memo, done, 0);
 
         /* material for this model (first connected Material) */
         {
@@ -648,7 +692,7 @@ int fbx_load(const unsigned char *b, size_t n, int max_tris,
                                 !cpush(&F, (unsigned char)mg) ||
                                 !cpush(&F, (unsigned char)mb)) goto fail;
                         }
-                        if (T.n / 3 > max_tris) goto done;
+                        if (T.n / 3 > max_tris) { seterr(err, errsz, "too many triangles"); goto fail; }
                         pn = 0;
                     }
                 }
@@ -656,7 +700,6 @@ int fbx_load(const unsigned char *b, size_t n, int max_tris,
         }
     }
 
-done:
     if (V.n == 0 || T.n == 0) {
         seterr(err, errsz, "FBX contains no triangles");
         goto fail;
@@ -687,11 +730,13 @@ done:
     else { cfree(&F); out->face_rgb = NULL; }
     for (i = 0; i < ntop; ++i) node_free(tops[i]);
     free(tops); free(geos); free(models); free(mats);
+    free(parent_id); free(memo); free(done);
     return 1;
 
 fail:
     ffree(&V); ifree(&T); cfree(&F);
     for (i = 0; i < ntop; ++i) node_free(tops[i]);
     free(tops); free(geos); free(models); free(mats);
+    free(parent_id); free(memo); free(done);
     return 0;
 }

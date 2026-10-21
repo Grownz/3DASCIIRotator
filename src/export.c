@@ -165,15 +165,17 @@ int gif_frame(GifWriter *g, const unsigned char *idx, int delay_cs) {
     fputc(g->h & 0xFF, g->f); fputc((g->h >> 8) & 0xFF, g->f);
     fputc(0, g->f);                              /* no local colour table */
     gif_lzw(g->f, idx, g->w * g->h, g->mcs);
-    return 1;
+    return ferror(g->f) ? 0 : 1;
 }
 
 int gif_end(GifWriter *g) {
+    int ok;
     if (!g) return 0;
     fputc(0x3B, g->f);
-    if (fclose(g->f) != 0) { free(g); return 0; }
+    ok = !ferror(g->f);
+    if (fclose(g->f) != 0) ok = 0;
     free(g);
-    return 1;
+    return ok;
 }
 
 /* ==========================================================================
@@ -371,6 +373,7 @@ int apng_frame(ApngWriter *a, const unsigned char *idx, int delay_num, int delay
         buf_u8(&raw, 0);                                  /* filter: none */
         buf_write(&raw, idx + (size_t)y * a->w, (size_t)a->w);
     }
+    if (raw.n != (size_t)a->h * ((size_t)a->w + 1)) { free(raw.p); return 0; }
 
     memset(&comp, 0, sizeof(comp));
     memset(&bits, 0, sizeof(bits));
@@ -406,13 +409,15 @@ int apng_frame(ApngWriter *a, const unsigned char *idx, int delay_num, int delay
     }
 
     free(raw.p); free(comp.p); free(bits.out.p); free(fcTL.p);
-    return 1;
+    return ferror(a->f) ? 0 : 1;
 }
 
 int apng_end(ApngWriter *a) {
+    int ok;
     if (!a) return 0;
     png_chunk(a->f, "IEND", NULL, 0);
-    if (fclose(a->f) != 0) { free(a); return 0; }
+    ok = !ferror(a->f);
+    if (fclose(a->f) != 0) ok = 0;
     free(a);
-    return 1;
+    return ok;
 }

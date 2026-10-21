@@ -4,6 +4,21 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.26] - 2026-10-21
+
+### Changed
+- Model names keep dots now (only the final extension is stripped), so files
+  such as `Dragon 2.5_fbx.fbx` are selectable by their real name.
+- Robustness: partial console writes are retried; the per-cell colour/luminance
+  buffers degrade gracefully when they cannot grow; `--tilt` is clamped in every
+  mode; a failed BVH build is reported; LOD caps the rebuilt mesh at 500k
+  triangles and refreshes the fit; the help text shows the correct numbers.
+- The 2x2 supersampling offsets use the true view scale, for cleaner edges.
+- Export playback follows the current spin speed and reports write errors.
+- 3MF resolves components and skips XML comments/CDATA; glTF supports
+  triangle strips/fans, rejects compressed meshes and avoids duplicate roots;
+  FBX composes parent transforms and reports truncation.
+
 ## [0.2.25] - 2026-10-21
 
 ### Changed

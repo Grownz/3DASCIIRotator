@@ -123,7 +123,7 @@ static int cluster_try(Scratch *s, const float *V, int nv,
         ++cnt;
     }
 
-    if (cnt == 0) return 0;
+    if (cnt == 0) return -1;   /* too coarse: everything collapsed */
     *ov = s->cv; *onv = cnv;
     *ot = s->ct; *ont = cnt;
     return 1;
@@ -134,7 +134,7 @@ int simplify_cluster(const float *verts, int nvert,
                      int target_tris, RawMesh *out, char *err, int errsz) {
     float org[3], mx[3];
     double area = 0.0, maxext, cell;
-    int i, iter, ok = 0;
+    int i, iter;
     Scratch S;
 
     out->verts = NULL; out->tris = NULL; out->nvert = out->ntri = 0;
@@ -183,35 +183,67 @@ int simplify_cluster(const float *verts, int nvert,
     cell = sqrt(area / (double)target_tris);
     if (cell < maxext * 1e-6) cell = maxext * 1e-6;
 
-    for (iter = 0; iter < 14; ++iter) {
-        float *ov; int onv; unsigned int *ot; int ont;
-        if (!cluster_try(&S, verts, nvert, tris, ntri, cell, org, &ov, &onv, &ot, &ont)) {
-            if (errsz) { strncpy(err, "decimation failed", (size_t)errsz - 1); err[errsz - 1] = '\0'; }
-            scratch_free(&S);
-            return 0;
-        }
-        if (ont <= target_tris) {
-            out->verts = (float *)malloc(sizeof(float) * 3 * (size_t)onv);
-            out->tris = (unsigned int *)malloc(sizeof(unsigned int) * 3 * (size_t)ont);
-            if (!out->verts || !out->tris) {
-                free(out->verts); free(out->tris);
-                out->verts = NULL; out->tris = NULL;
+    {
+        double lo = 0.0, hi = 0.0;   /* lo: too many tris, hi: collapsed */
+        float *bv = NULL; int bnv = 0;
+        unsigned int *bt = NULL; int bnt = 0;
+        for (iter = 0; iter < 28; ++iter) {
+            float *ov; int onv; unsigned int *ot; int ont;
+            int r = cluster_try(&S, verts, nvert, tris, ntri, cell, org, &ov, &onv, &ot, &ont);
+            if (r == 0) {
+                free(bv); free(bt);
                 if (errsz) { strncpy(err, "out of memory", (size_t)errsz - 1); err[errsz - 1] = '\0'; }
                 scratch_free(&S);
                 return 0;
             }
-            memcpy(out->verts, ov, sizeof(float) * 3 * (size_t)onv);
-            memcpy(out->tris, ot, sizeof(unsigned int) * 3 * (size_t)ont);
-            out->nvert = onv;
-            out->ntri = ont;
-            ok = 1;
-            break;
+            if (r < 0) {                     /* too coarse: everything collapsed */
+                hi = cell;
+                cell = (lo > 0.0) ? sqrt(lo * hi) : cell * 0.5;
+                if (cell < maxext * 1e-9) break;
+                continue;
+            }
+            if (ont <= target_tris) {
+                out->verts = (float *)malloc(sizeof(float) * 3 * (size_t)onv);
+                out->tris = (unsigned int *)malloc(sizeof(unsigned int) * 3 * (size_t)ont);
+                if (!out->verts || !out->tris) {
+                    free(out->verts); free(out->tris);
+                    out->verts = NULL; out->tris = NULL;
+                    free(bv); free(bt);
+                    if (errsz) { strncpy(err, "out of memory", (size_t)errsz - 1); err[errsz - 1] = '\0'; }
+                    scratch_free(&S);
+                    return 0;
+                }
+                memcpy(out->verts, ov, sizeof(float) * 3 * (size_t)onv);
+                memcpy(out->tris, ot, sizeof(unsigned int) * 3 * (size_t)ont);
+                out->nvert = onv;
+                out->ntri = ont;
+                free(bv); free(bt);
+                scratch_free(&S);
+                if (errsz) err[0] = '\0';
+                return 1;
+            }
+            /* valid but still too many: remember the best and coarsen */
+            if (bnt == 0 || ont < bnt) {
+                float *nv = (float *)malloc(sizeof(float) * 3 * (size_t)onv);
+                unsigned int *nt = (unsigned int *)malloc(sizeof(unsigned int) * 3 * (size_t)ont);
+                if (nv && nt) {
+                    memcpy(nv, ov, sizeof(float) * 3 * (size_t)onv);
+                    memcpy(nt, ot, sizeof(unsigned int) * 3 * (size_t)ont);
+                    free(bv); free(bt);
+                    bv = nv; bnv = onv; bt = nt; bnt = ont;
+                } else { free(nv); free(nt); }
+            }
+            lo = cell;
+            cell = (hi > 0.0) ? sqrt(lo * hi) : cell * sqrt((double)ont / (double)target_tris) * 1.10;
+            if (cell > maxext * 4.0) cell = maxext * 4.0;
         }
-        cell *= sqrt((double)ont / (double)target_tris) * 1.10;
-        if (cell > maxext * 4.0) cell = maxext * 4.0;
+        scratch_free(&S);
+        if (bnt > 0) {                       /* best effort: closest valid result */
+            out->verts = bv; out->tris = bt; out->nvert = bnv; out->ntri = bnt;
+            if (errsz) err[0] = '\0';
+            return 1;
+        }
+        if (errsz) { strncpy(err, "decimation failed", (size_t)errsz - 1); err[errsz - 1] = '\0'; }
+        return 0;
     }
-    scratch_free(&S);
-    if (!ok) { if (errsz) { strncpy(err, "decimation failed", (size_t)errsz - 1); err[errsz - 1] = '\0'; } return 0; }
-    if (errsz) err[0] = '\0';
-    return 1;
 }

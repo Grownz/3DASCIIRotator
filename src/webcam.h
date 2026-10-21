@@ -31,6 +31,9 @@ void webcam_unlock(void);
 /* The friendly name of the active device (or "webcam"). */
 const char *webcam_device_name(void);
 
+/* Non-zero if the capture thread stopped because of an error. */
+int webcam_error(void);
+
 /* Release the Media Foundation platform (call once before exit). */
 void webcam_global_shutdown(void);
 

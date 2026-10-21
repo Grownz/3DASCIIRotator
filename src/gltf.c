@@ -421,9 +421,11 @@ static void emit_primitive(Gctx *g, JVal *prim, const double *world, const unsig
     int icount = 0;
     int base, i;
 
-    if (!posacc || mode != 4) return;
+    if (!posacc || (mode != 4 && mode != 5 && mode != 6)) return;
+    if (g->T->n / 3 >= g->max_tris) return;
     pos = acc_floats(g->root, g->bufs, g->nb, jint(posacc, -1), &pcount, &pcomps);
     if (!pos || pcomps < 3) { free(pos); return; }
+    if (pcount <= 0 || pcount > g->max_tris * 4) { free(pos); return; }
 
     base = g->V->n / 3;
     for (i = 0; i < pcount; ++i) {
@@ -440,17 +442,21 @@ static void emit_primitive(Gctx *g, JVal *prim, const double *world, const unsig
         JVal *idacc = jget(prim, "indices");
         if (idacc) idx = acc_uints(g->root, g->bufs, g->nb, jint(idacc, -1), &icount);
     }
-    if (idx && icount >= 3) {
-        for (i = 0; i + 2 < icount; i += 3) {
-            unsigned int a = idx[i], b = idx[i + 1], c = idx[i + 2];
-            if (a >= (unsigned)pcount || b >= (unsigned)pcount || c >= (unsigned)pcount) continue;
-            if (!ipush(g->T, (unsigned)(base + a)) || !ipush(g->T, (unsigned)(base + b)) || !ipush(g->T, (unsigned)(base + c))) break;
-            if (rgb) { cpush(g->F, rgb[0]); cpush(g->F, rgb[1]); cpush(g->F, rgb[2]); }
-            if (g->T->n / 3 > g->max_tris) break;
-        }
-    } else {
-        for (i = 0; i + 2 < pcount; i += 3) {
-            if (!ipush(g->T, (unsigned)(base + i)) || !ipush(g->T, (unsigned)(base + i + 1)) || !ipush(g->T, (unsigned)(base + i + 2))) break;
+    {
+        int nv = idx ? icount : pcount;
+        for (i = 0; i + 2 < nv; i += (mode == 4 ? 3 : 1)) {
+            int a, b, c;
+            unsigned va, vb, vc;
+            if (mode == 4) { a = i; b = i + 1; c = i + 2; }
+            else if (mode == 5) { if (i & 1) { a = i + 1; b = i; c = i + 2; } else { a = i; b = i + 1; c = i + 2; } }
+            else { a = 0; b = i + 1; c = i + 2; }
+            va = idx ? idx[a] : (unsigned)a;
+            vb = idx ? idx[b] : (unsigned)b;
+            vc = idx ? idx[c] : (unsigned)c;
+            if (va >= (unsigned)pcount || vb >= (unsigned)pcount || vc >= (unsigned)pcount) continue;
+            if (!ipush(g->T, (unsigned)(base + va)) ||
+                !ipush(g->T, (unsigned)(base + vb)) ||
+                !ipush(g->T, (unsigned)(base + vc))) break;
             if (rgb) { cpush(g->F, rgb[0]); cpush(g->F, rgb[1]); cpush(g->F, rgb[2]); }
             if (g->T->n / 3 > g->max_tris) break;
         }
@@ -559,6 +565,22 @@ int gltf_load(const unsigned char *b, size_t n, const wchar_t *path,
     p.s = json; p.e = json + jsonlen;
     root = jvalue(&p, 0);
     if (!root || root->type != J_OBJ) { jfree(root); seterr(err, errsz, "bad glTF JSON"); return 0; }
+    {
+        JVal *req = jget(root, "extensionsRequired");
+        if (req && req->type == J_ARR) {
+            int k;
+            for (k = 0; k < req->n; ++k) {
+                JVal *e = jidx(req, k);
+                if (e && e->type == J_STR &&
+                    (!strcmp(e->str, "KHR_draco_mesh_compression") ||
+                     !strcmp(e->str, "EXT_meshopt_compression"))) {
+                    jfree(root);
+                    seterr(err, errsz, "compressed glTF is not supported");
+                    return 0;
+                }
+            }
+        }
+    }
 
     memset(bufs, 0, sizeof(bufs));
     buffers = jget(root, "buffers");
@@ -617,7 +639,22 @@ int gltf_load(const unsigned char *b, size_t n, const wchar_t *path,
             int k;
             for (k = 0; k < snodes->n; ++k) walk_node(&g, nodes, jint(snodes->items[k], -1), ident, 0);
         } else if (nodes && nodes->type == J_ARR) {
-            for (i = 0; i < nodes->n; ++i) walk_node(&g, nodes, i, ident, 0);
+            char *child = (char *)calloc((size_t)nodes->n, 1);
+            if (child) {
+                int k;
+                for (i = 0; i < nodes->n; ++i) {
+                    JVal *ch = jget(nodes->items[i], "children");
+                    if (ch && ch->type == J_ARR)
+                        for (k = 0; k < ch->n; ++k) {
+                            int ci = jint(ch->items[k], -1);
+                            if (ci >= 0 && ci < nodes->n) child[ci] = 1;
+                        }
+                }
+                for (i = 0; i < nodes->n; ++i) if (!child[i]) walk_node(&g, nodes, i, ident, 0);
+                free(child);
+            } else {
+                for (i = 0; i < nodes->n; ++i) walk_node(&g, nodes, i, ident, 0);
+            }
         }
     }
 

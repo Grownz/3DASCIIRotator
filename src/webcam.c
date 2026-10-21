@@ -59,6 +59,7 @@ static CRITICAL_SECTION g_lock;
 static int g_lock_init;
 static unsigned char *g_front, *g_back;
 static int g_w, g_h, g_is_rgb, g_has_frame, g_started;
+static volatile LONG g_status;      /* non-zero once capture stopped on an error */
 static int g_locked;
 static UINT32 g_stride;
 static char g_device_name[128] = "webcam";
@@ -165,13 +166,14 @@ static int set_type(IMFSourceReader *r, const GUID *sub, int w, int h) {
 
 static unsigned char clamp8(int v) { return (unsigned char)(v < 0 ? 0 : v > 255 ? 255 : v); }
 
-static void convert_to_rgb(const unsigned char *src, size_t len, unsigned char *dst) {
+static int convert_to_rgb(const unsigned char *src, size_t len, unsigned char *dst) {
     int w = g_w, h = g_h, x, y;
-    (void)len;
+    if (w <= 0 || h <= 0) return 0;
     if (g_is_rgb) {
         int stride = (int)g_stride;
         int astep = stride < 0 ? -stride : stride;
         if (astep < w * 4) astep = w * 4;
+        if (len < (size_t)astep * (size_t)h) return 0;
         for (y = 0; y < h; ++y) {
             int sy = (stride < 0) ? (h - 1 - y) : y;
             const unsigned char *row = src + (size_t)sy * (size_t)astep;
@@ -184,14 +186,20 @@ static void convert_to_rgb(const unsigned char *src, size_t len, unsigned char *
         }
     } else {
         int stride = (int)g_stride;
+        int astep, flip;
         const unsigned char *yp;
         const unsigned char *uv;
-        if (stride < w) stride = w;
+        if (stride == 0) stride = w;
+        flip = stride < 0;
+        astep = flip ? -stride : stride;
+        if (astep < w) astep = w;
+        if (len < (size_t)astep * (size_t)h + (size_t)astep * (size_t)((h + 1) / 2)) return 0;
         yp = src;
-        uv = src + (size_t)stride * (size_t)h;
+        uv = src + (size_t)astep * (size_t)h;
         for (y = 0; y < h; ++y) {
-            const unsigned char *yr = yp + (size_t)y * (size_t)stride;
-            const unsigned char *ur = uv + (size_t)(y >> 1) * (size_t)stride;
+            int sy = flip ? (h - 1 - y) : y;
+            const unsigned char *yr = yp + (size_t)sy * (size_t)astep;
+            const unsigned char *ur = uv + (size_t)(sy >> 1) * (size_t)astep;
             unsigned char *o = dst + (size_t)y * (size_t)w * 3;
             for (x = 0; x < w; ++x) {
                 int Y = (int)yr[x] - 16;
@@ -208,6 +216,7 @@ static void convert_to_rgb(const unsigned char *src, size_t len, unsigned char *
             }
         }
     }
+    return 1;
 }
 
 static DWORD WINAPI capture_thread(LPVOID p) {
@@ -222,6 +231,8 @@ static DWORD WINAPI capture_thread(LPVOID p) {
         hr = g_reader->lpVtbl->ReadSample(g_reader, (DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM,
                                           0, &stream, &flags, &ts, &sample);
         if (FAILED(hr)) break;
+        if (flags & MF_SOURCE_READERF_ERROR) { g_status = 1; break; }
+        if (flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) { g_status = 1; break; }
         if (flags & MF_SOURCE_READERF_ENDOFSTREAM) break;
         if (sample) {
             IMFMediaBuffer *buf = NULL;
@@ -229,16 +240,19 @@ static DWORD WINAPI capture_thread(LPVOID p) {
                 BYTE *data = NULL;
                 DWORD maxlen = 0, curlen = 0;
                 if (SUCCEEDED(buf->lpVtbl->Lock(buf, &data, &maxlen, &curlen))) {
-                    convert_to_rgb(data, (size_t)curlen, g_back);
-                    buf->lpVtbl->Unlock(buf);
-                    EnterCriticalSection(&g_lock);
-                    {
-                        unsigned char *tmp = g_front;
-                        g_front = g_back;
-                        g_back = tmp;
-                        g_has_frame = 1;
+                    if (convert_to_rgb(data, (size_t)curlen, g_back)) {
+                        buf->lpVtbl->Unlock(buf);
+                        EnterCriticalSection(&g_lock);
+                        {
+                            unsigned char *tmp = g_front;
+                            g_front = g_back;
+                            g_back = tmp;
+                            g_has_frame = 1;
+                        }
+                        LeaveCriticalSection(&g_lock);
+                    } else {
+                        buf->lpVtbl->Unlock(buf);
                     }
-                    LeaveCriticalSection(&g_lock);
                 }
                 buf->lpVtbl->Release(buf);
             }
@@ -352,6 +366,7 @@ int webcam_start(int index, char *err, int errsz) {
 
     g_source = source;          /* kept so webcam_stop() can call Shutdown() */
     g_started = 1;
+    g_status = 0;
     for (i = 0; i < (int)count; ++i) devs[i]->lpVtbl->Release(devs[i]);
     pCoTaskMemFree(devs);
     if (rattr) rattr->lpVtbl->Release(rattr);
@@ -435,4 +450,8 @@ void webcam_unlock(void) {
 
 const char *webcam_device_name(void) {
     return g_device_name[0] ? g_device_name : "webcam";
+}
+
+int webcam_error(void) {
+    return g_status != 0;
 }
