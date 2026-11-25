@@ -302,6 +302,8 @@ settles into a shallow debris layer on the floor the object was resting on.
   tools/make_stego_model.py    regenerates models/stego.ply
   tools/make_shape_models.py   regenerates the other models/*.ply
   tools/make_preview_gif.py    regenerates the preview GIFs (docs/*.gif)
+  tests/smoke.ps1       headless checks (shapes, loaders, export, filter); runs in CI
+  tests/interactive.ps1 drives the real program with injected keys (local only)
   build.bat             MSVC build script
   readme.md             this file
   changelog.md          version history

@@ -1,0 +1,37 @@
+# Drives the real interactive program by injecting keys into its console, then checks
+# what it saved to build\ascii3D.ini on exit. Local only (needs a desktop session, not run in CI).
+# Run from anywhere after build.bat:  powershell -File tests\interactive.ps1
+$root = Split-Path $PSScriptRoot -Parent
+$exe  = Join-Path $root 'build\ascii3D.exe'
+$ini  = Join-Path $root 'build\ascii3D.ini'
+$out  = Join-Path $env:TEMP "a3d_keys_$PID.txt"
+$fail = 0
+$backup = if (Test-Path $ini) { Get-Content $ini -Raw } else { $null }
+
+function Run($keys) {   # returns the saved settings as a hashtable
+    Start-Process pwsh -ArgumentList '-NoProfile','-File',"$PSScriptRoot\keys.ps1",'-Exe',$exe,'-Keys',"`"$keys`"" `
+        -Wait -WindowStyle Hidden -RedirectStandardOutput $out
+    $h = @{}
+    Get-Content $ini | ForEach-Object { if ($_ -match '^(\w+)=(.*)$') { $h[$Matches[1]] = $Matches[2] } }
+    $h
+}
+function Check($name, $ok) { if ($ok) { "ok    $name" } else { "FAIL  $name"; $script:fail++ } }
+
+try {
+    Remove-Item $ini -ErrorAction SilentlyContinue
+    $s = Run '+ + UP UP 3 ESC'
+    Check 'speed, tilt and 1-9 jump are saved' ($s.speed -eq '25' -and $s.tilt -eq '10' -and $s.shape -eq 'diamond')
+    $s = Run '+ UP ESC'
+    Check 'saved settings are loaded at start' ($s.speed -eq '30' -and $s.tilt -eq '15')
+    $s = Run 'SHIFTSPACE ESC';                     Check 'Shift+Space goes to the previous shape' ($s.shape -eq 'cylinder')
+    $s = Run 'TAB / s t e ENTER TAB ESC';          Check 'list filter loads the match' ($s.shape -eq 'stego')
+    $s = Run 'TAB RIGHT RIGHT RIGHT TAB ESC';      $m = [int]$s.mesh
+    $s = Run 'TAB DEL TAB ESC';                    Check 'Del resets the mesh colour' ($m -ne 7 -and $s.mesh -eq '7')
+    $s = Run '? ESC HOME ESC';                     Check 'help closes without quitting; Home toggles FPS' ($s.fps -eq '1')
+} finally {
+    Remove-Item $out -ErrorAction SilentlyContinue
+    if ($null -ne $backup) { Set-Content $ini $backup -NoNewline } else { Remove-Item $ini -ErrorAction SilentlyContinue }
+}
+if ($fail) { "$fail check(s) failed"; exit 1 }
+'all checks passed'
+exit 0
