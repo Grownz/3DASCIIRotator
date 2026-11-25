@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Bake the extra shapes (F1 car, companion cube, Maus) into C headers.
+"""Bake the extra shapes (F1 car, companion cube, Maus, ...) into PLY meshes.
 
 Writes binary PLY meshes into models/ (loaded at runtime by ascii3D):
   models/f1.ply          from Kenney's Car Kit "race" model (CC0)
   models/companion.ply   from the "Portal: Companion Cube" model (CC BY 3.0)
   models/maus.ply        built from primitives here (original work)
 
-Each header exposes <PREFIX>_NVERT, <PREFIX>_NTRI, <PREFIX>_VERT[] and
-<PREFIX>_TRI[]. The application ray-traces the triangles.
+Each file is a binary little-endian PLY (float xyz + triangle lists) that the
+application loads like a user model and ray-traces. The per-model camera
+elevation lives in the committed models/<name>.json sidecars.
 
 Requires: numpy, trimesh  (pip install numpy trimesh)
 

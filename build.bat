@@ -47,7 +47,11 @@ if errorlevel 1 (
 )
 
 REM The shipped meshes (stego, f1, ...) are loaded at runtime from models\ next to the exe.
-if exist models xcopy /y /q /i models build\models >nul
+if not exist models (
+  echo [error] models\ is missing: the shipped meshes live there.
+  exit /b 1
+)
+xcopy /y /q /i models build\models >nul
 if errorlevel 1 (
   echo [error] Copying models\ failed.
   exit /b 1

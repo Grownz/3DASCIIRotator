@@ -322,8 +322,8 @@ static void update_transform(void) {
 }
 
 /* Runtime up-axis cycle (z -> y -> x). The model is rotated into the Z-up
- * object frame at render time, so switching it needs no rebuild and also works
- * for the built-in meshes. */
+ * object frame at render time, so switching it needs no rebuild and works
+ * for every mesh. */
 static int    g_up_axis = 0;          /* 0 = z-up, 1 = y-up, 2 = x-up */
 static double g_mrot[9]     = { 1,0,0, 0,1,0, 0,0,1 };
 static double g_mrot_inv[9] = { 1,0,0, 0,1,0, 0,0,1 };

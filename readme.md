@@ -339,8 +339,8 @@ python tools\make_shape_models.py
   the Type 59 tank is original geometry. Both are baked by
   `tools/make_shape_models.py`.
 
-The built-in meshes are baked into the C headers listed above; user models are
-loaded at runtime from the `models/` folder.
+The shipped meshes are baked into `models/*.ply` by the generators above; they
+and user models are loaded at runtime from the `models/` folder.
 
 ## Versioning
 

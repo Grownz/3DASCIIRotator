@@ -58,7 +58,7 @@ An invalid sidecar is ignored with a warning; the model still loads.
 
 - Index type changes from `unsigned short` to `unsigned int`; both generators
   (`tools/make_stego_model.py`, `tools/make_shape_models.py`) emit `unsigned int`
-  and the embedded headers are regenerated.
+  and the generated meshes are rewritten (since 3.2.0 as PLY files in `models/`).
 - `MeshDef` gains `owned` (malloc vs `static const`) and `zoom`.
 - The fixed `SHAPE_NAMES[]` list is replaced by a dynamic registry of items
   (analytic or mesh); `SH_LOADED` is a generic mesh kind.
