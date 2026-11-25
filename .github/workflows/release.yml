@@ -1,0 +1,37 @@
+name: release
+# Push a tag like v3.2.0 to build, test and publish a zip (exe + models/) as a GitHub release.
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        shell: cmd
+        run: build.bat
+      - name: Smoke tests
+        shell: pwsh
+        run: tests/smoke.ps1
+      - name: Tag must match the built version
+        shell: pwsh
+        run: |
+          $v = (& build\ascii3D.exe --version) -replace '^.* ', ''
+          if ("v$v" -ne $env:GITHUB_REF_NAME) { throw "tag $env:GITHUB_REF_NAME does not match exe version $v" }
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "ascii3D-$env:GITHUB_REF_NAME-win-x64"
+          New-Item -ItemType Directory $name | Out-Null
+          Copy-Item build\ascii3D.exe, readme.md, LICENSE, changelog.md $name
+          Copy-Item models "$name\models" -Recurse     # the shipped meshes only, not the test fixtures in build\models
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+          "ZIP=$name.zip" >> $env:GITHUB_ENV
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME $env:ZIP --title $env:GITHUB_REF_NAME --generate-notes

@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The shipped meshes now appear in folder-scan order in the model list.
 - `tools/make_shape_models.py` and `tools/make_stego_model.py` write PLY files
   into `models/` instead of C headers.
+- New `release` workflow: pushing a tag `vX.Y.Z` builds, runs the smoke tests and
+  publishes `ascii3D-vX.Y.Z-win-x64.zip` (exe, `models/`, readme, licence) as a
+  GitHub release; the tag must match the exe version.
 
 ## [3.1.0] - 2026-11-25
 

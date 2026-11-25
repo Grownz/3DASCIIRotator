@@ -13,7 +13,9 @@ native `.exe` plus a `models/` folder with the shipped meshes.
 
 Prebuilt Windows x64 binaries are on the
 [releases page](https://github.com/Grownz/3DASCIIRotator/releases/latest)
-(latest asset: `ascii3D.exe`). No installer and no runtime are required.
+(from 3.2.0 a zip with `ascii3D.exe` and its `models/` folder: extract it and keep
+the two together; 3.0.0 and older are a single `ascii3D.exe`). No installer and
+no runtime are required.
 
 ## Features
 
