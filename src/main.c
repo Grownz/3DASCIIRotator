@@ -141,6 +141,9 @@ static int grow_buf(void **p, int *cap, size_t elem, int n) {
 static int cellfg_ensure(int n) { return grow_buf((void **)&g_cellfg, &g_cellfg_cap, sizeof(short), n); }
 static int lum_ensure(int n)    { return grow_buf((void **)&g_lum, &g_lum_cap, sizeof(double), n); }
 static int    g_help = 0, g_hud_on = 1, g_paused = 0;
+static int    g_hud_arg = 0;                       /* --hud given: it wins over the saved HUD mode */
+static int    g_hud_mode = 0;                     /* 0 = full status line, 1 = compact (--hud) */
+static int    g_hq = 1;                            /* 1 = 2x2 edge supersampling, 0 = one sample per cell ([x]) */
 static int    g_tilt_arg = 0;                      /* --tilt given: it wins over the saved settings */
 static char   g_filter[32] = "";                 /* model-list filter (substring, case-insensitive) */
 static int    g_filter_len = 0, g_filter_edit = 0; /* edit mode: every key goes to the filter */
@@ -1235,7 +1238,7 @@ static void render_grid(char *grid, int cols, int rows) {
         g_matgrad_light = (unsigned char)g_light_color;
     }
     if (!cellfg_ensure(cols * rows)) { free(g_cellfg); g_cellfg = NULL; g_cellfg_cap = 0; }
-    g_super = (g_mesh && g_mesh->ntri > SUPER_TRIS) ? 0 : 1;
+    g_super = (g_hq && !(g_mesh && g_mesh->ntri > SUPER_TRIS)) ? 1 : 0;   /* [x] toggles g_hq */
 
     ctx.grid = grid; ctx.cols = cols; ctx.rows = rows; ctx.aspect = aspect;
 
@@ -1317,19 +1320,19 @@ static void draw_hud(char *grid, int cols, int rows) {
     char hud[300];
     int n, i;
     if (g_webcam) {
-        _snprintf(hud, sizeof(hud),
-                  " %s v%s  |  webcam: %s  |  [ESC] quit  [?] help ",
-                  APP_NAME, APP_VERSION, webcam_device_name());
+        if (g_hud_mode) _snprintf(hud, sizeof(hud), " webcam: %s ", webcam_device_name());
+        else _snprintf(hud, sizeof(hud), " %s  |  webcam: %s  |  [ESC] quit  [?] help ", APP_NAME, webcam_device_name());
     } else if (g_shattered) {
-        _snprintf(hud, sizeof(hud),
-                  " %s v%s  |  shape: %s  |  tilt: %d deg   "
-                  "[ESC] quit   [ENTER] rebuild   [?] help ",
-                  APP_NAME, APP_VERSION, g_shape_name, (int)g_tilt);
+        if (g_hud_mode) _snprintf(hud, sizeof(hud), " %s  tilt %d deg ", g_shape_name, (int)g_tilt);
+        else _snprintf(hud, sizeof(hud),
+                  " %s  |  shape: %s  |  tilt: %d deg   [ESC] quit   [ENTER] rebuild   [?] help ",
+                  APP_NAME, g_shape_name, (int)g_tilt);
     } else {
-        _snprintf(hud, sizeof(hud),
-                  " %s v%s  |  shape: %s  |  spin: %d deg/s%s  |  tilt: %d deg   "
-                  "[ESC] quit  [?] help ",
-                  APP_NAME, APP_VERSION, g_shape_name, (int)(g_speed + 0.5), g_paused ? " (paused)" : "", (int)g_tilt);
+        if (g_hud_mode) _snprintf(hud, sizeof(hud), " %s  %d deg/s%s  tilt %d deg ",
+                  g_shape_name, (int)(g_speed + 0.5), g_paused ? " (paused)" : "", (int)g_tilt);
+        else _snprintf(hud, sizeof(hud),
+                  " %s  |  shape: %s  |  spin: %d deg/s%s  |  tilt: %d deg   [ESC] quit  [?] help ",
+                  APP_NAME, g_shape_name, (int)(g_speed + 0.5), g_paused ? " (paused)" : "", (int)g_tilt);
     }
     hud[sizeof(hud) - 1] = '\0';
     n = g_hud_on ? (int)strlen(hud) : 0;     /* [h] hides this line only */
@@ -1444,18 +1447,23 @@ static void draw_help(char *grid, int cols, int rows) {
         "ESC / q    quit",           "SPACE      next (Shift: previous)",
         "1 - 9      jump to shape",  "TAB        model list (/ filter)",
         "UP / DOWN  tilt",
-        "+ / -      spin speed",     "k / PAUSE  pause",
+        "+ - [ ]    spin speed",     "k / PAUSE  pause",
         "ENTER      shatter",        "a          up axis",
         "PGUP/PGDN  LOD",            "g / p      export GIF / PNG",
-        "r          rescan models",  "h          hide HUD",
-        "HOME       FPS",            "list: LEFT/RIGHT/c/DEL  colour",
+        "r          rescan models",  "h / H      hide / compact HUD",
+        "HOME       FPS",            "x          2x2 edge quality on/off",
+        "list: LEFT/RIGHT/c/DEL  colour",
         "? / F1     this help",      "any key closes"
     };
     int n = (int)(sizeof(L) / sizeof(L[0])), w = 0, i, k, r, c, x0, y0;
     for (i = 0; i < n; ++i) { int len = (int)strlen(L[i]); if (len > w) w = len; }
     w += 4;
     g_help_w = 0;
-    if (w > cols || n + 2 > rows) return;      /* too small: draw nothing */
+    if (w > cols || n + 2 > rows) {            /* too small: say so instead of showing nothing */
+        g_help = 0;
+        msg_setf("help needs a larger console: see --help");
+        return;
+    }
     x0 = (cols - w) / 2; y0 = (rows - (n + 2)) / 2;
     for (r = 0; r < n + 2; ++r)
         for (c = 0; c < w; ++c) {
@@ -1521,15 +1529,22 @@ static void draw_menu(char *grid, int cols, int rows) {
         r = 1 + i;
         grid[(size_t)r * cols + (x0 + 1)] = (idx == g_menu_sel) ? '>' : ' ';
         grid[(size_t)r * cols + (x0 + 2)] = (idx == g_item_index) ? '*' : ' ';   /* currently loaded */
-        avail = cols - x0 - 3;                 /* name cells (up to the last column) */
+        avail = cols - x0 - 4;                 /* name cells; the last column is the scrollbar */
         if (avail < 1) avail = 1;
         for (k = 0; k < avail && k < (int)sizeof(g_items[idx].name) - 1 && nm[k]; ++k) grid[(size_t)r * cols + (x0 + 3 + k)] = nm[k];
-        if (nm[k]) grid[(size_t)r * cols + (cols - 1)] = '~';   /* truncated */
+        if (nm[k]) grid[(size_t)r * cols + (x0 + 3 + avail - 1)] = '~';   /* name is cut off here */
     }
-    if (g_menu_scroll > 0)
+    if (nmatch > listrows) {                  /* scrollbar in the last column: ^ track/thumb v */
+        int track = listrows - 2, th, tpos, t;
         grid[(size_t)1 * cols + (cols - 1)] = '^';
-    if (g_menu_scroll + listrows < nmatch)
-        grid[(size_t)(b0 - 1) * cols + (cols - 1)] = 'v';
+        grid[(size_t)listrows * cols + (cols - 1)] = 'v';
+        if (track > 0) {
+            th = track * listrows / nmatch; if (th < 1) th = 1;
+            tpos = (nmatch > listrows) ? g_menu_scroll * (track - th) / (nmatch - listrows) : 0;
+            for (t = 0; t < track; ++t)
+                grid[(size_t)(2 + t) * cols + (cols - 1)] = (t >= tpos && t < tpos + th) ? '#' : ':';
+        }
+    }
     if (nmatch == 0 && x0 + 3 + 10 < cols) memcpy(&grid[(size_t)1 * cols + x0 + 3], "(no match)", 10);
 
     /* --- two colour sliders (bottom third): mesh + light source ----------- */
@@ -2177,6 +2192,7 @@ static void print_help(void) {
         "      --snapshot       Render a single frame to stdout and exit\n"
         "      --angle <deg>    Initial rotation angle in degrees (default: 0)\n"
         "      --tilt <deg>     Initial axis tilt in degrees, -90..90 (default: 0)\n"
+        "      --hud <mode>     Status line: full | compact | off (default: full)\n"
         "      --up <axis>      Model up axis: z, y or x (default: z; key A cycles)\n"
         "      --shatter        With --snapshot: shatter and simulate the fall\n"
         "      --sim <sec>      With --shatter: seconds to simulate (default: 3)\n"
@@ -2216,7 +2232,11 @@ static void print_help(void) {
         "  A                    Cycle the model up axis (z -> y -> x)\n"
         "  POS1 (HOME)          Toggle the FPS display (bottom-left)\n"
         "  ?  / F1              Show the key help box; any key closes it\n"
-        "  H                    Show / hide the status line (top-left)\n"
+        "  h / SHIFT+H          Hide / show the status line; Shift+H switches it\n"
+        "                       between full and compact\n"
+        "  X                    Toggle 2x2 edge supersampling (quality / speed);\n"
+        "                       GIF/PNG exports follow the current setting\n"
+        "  [ / ]                Same as - / + (spin speed)\n"
         "  K / PAUSE            Pause / resume the spin (and the shatter fall)\n"
         "  g / p                Export a full 360-degree turn as an animated\n"
         "                       GIF / APNG (current colours, tilt and speed;\n"
@@ -2338,6 +2358,14 @@ static int parse_args(int argc, char **argv) {
             }
             g_start_tilt = atof(argv[++i]);
             g_tilt_arg = 1;
+        } else if (_stricmp(a, "--hud") == 0) {
+            if (i + 1 >= argc) { fprintf(stderr, "error: --hud requires full, compact or off\n"); return 0; }
+            ++i;
+            if (_stricmp(argv[i], "full") == 0)         { g_hud_mode = 0; g_hud_on = 1; }
+            else if (_stricmp(argv[i], "compact") == 0) { g_hud_mode = 1; g_hud_on = 1; }
+            else if (_stricmp(argv[i], "off") == 0)     { g_hud_on = 0; }
+            else { fprintf(stderr, "error: --hud requires full, compact or off\n"); return 0; }
+            g_hud_arg = 1;
         } else if (_stricmp(a, "--up") == 0) {
             const char *v;
             if (i + 1 >= argc) { fprintf(stderr, "error: --up requires z, y or x\n"); return 0; }
@@ -2834,6 +2862,10 @@ static void settings_load(void) {
     if (v >= 0 && v < 256 && COLORS[colors_index(v)] == v) { g_light_color = v; g_light_sel = colors_index(v); }
     v = ini_int(L"fps", -1);
     if (v == 0 || v == 1) g_show_fps = v;
+    v = ini_int(L"quality", -1);
+    if (v == 0 || v == 1) g_hq = v;
+    v = ini_int(L"hud", -1);                   /* 0 = full, 1 = compact */
+    if (!g_hud_arg && (v == 0 || v == 1)) g_hud_mode = v;
     GetPrivateProfileStringW(L"ascii3D", L"shape", L"", w, 64, g_ini_path);
     for (i = 0; w[i] && i < (int)sizeof(g_saved_shape) - 1; ++i) {
         if (w[i] < 32 || w[i] > 126) { g_saved_shape[0] = '\0'; return; }   /* ASCII names only */
@@ -2851,6 +2883,8 @@ static void settings_save(void) {
     _snwprintf(w, 64, L"%d", g_fg_color);            w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"mesh", w, g_ini_path);
     _snwprintf(w, 64, L"%d", g_light_color);         w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"light", w, g_ini_path);
     _snwprintf(w, 64, L"%d", g_show_fps ? 1 : 0);    w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"fps", w, g_ini_path);
+    _snwprintf(w, 64, L"%d", g_hq ? 1 : 0);          w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"quality", w, g_ini_path);
+    _snwprintf(w, 64, L"%d", g_hud_mode ? 1 : 0);    w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"hud", w, g_ini_path);
     for (i = 0; g_shape_name_buf[i] && i < 63; ++i) {
         if ((unsigned char)g_shape_name_buf[i] < 32 || (unsigned char)g_shape_name_buf[i] > 126) { i = 0; break; }   /* non-ASCII: save no shape */
         w[i] = (wchar_t)g_shape_name_buf[i];
@@ -3085,7 +3119,12 @@ int main(int argc, char **argv) {
                                 menu_fix_sel();
                             }
                             else if (vk == VK_F1 || ch == '?') g_help = 1;
-                            else if (ch == 'h' || ch == 'H') g_hud_on = !g_hud_on;
+                            else if (ch == 'h') g_hud_on = !g_hud_on;
+                            else if (ch == 'H') { g_hud_mode = !g_hud_mode; g_hud_on = 1; }   /* Shift+H: full <-> compact */
+                            else if (ch == 'x' || ch == 'X') {
+                                g_hq = !g_hq;
+                                msg_setf(g_hq ? "quality: 2x2 edge supersampling" : "quality: one sample per cell");
+                            }
                             else if (!g_webcam && (vk == VK_PAUSE || ch == 'k' || ch == 'K')) {
                                 g_paused = !g_paused;
                                 msg_setf(g_paused ? "paused" : "resumed");
@@ -3103,8 +3142,8 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_UP)   g_menu_sel = menu_step(g_menu_sel, -1);
                                 else if (vk == VK_DOWN) g_menu_sel = menu_step(g_menu_sel, 1);
                                 else if (vk == VK_RETURN || vk == VK_SPACE) { if (item_matches(g_menu_sel)) select_index(g_menu_sel); }
-                                else if (ch == '+' || ch == '=') { g_speed += SPEED_STEP; if (g_speed > MAX_SPEED) g_speed = MAX_SPEED; }
-                                else if (ch == '-' || ch == '_') { g_speed -= SPEED_STEP; if (g_speed < MIN_SPEED) g_speed = MIN_SPEED; }
+                                else if (ch == '+' || ch == '=' || ch == ']') { g_speed += SPEED_STEP; if (g_speed > MAX_SPEED) g_speed = MAX_SPEED; }
+                                else if (ch == '-' || ch == '_' || ch == '[') { g_speed -= SPEED_STEP; if (g_speed < MIN_SPEED) g_speed = MIN_SPEED; }
                                 else if (vk == VK_PRIOR) apply_lod(-1);
                                 else if (vk == VK_NEXT)  apply_lod(1);
                                 else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
@@ -3144,8 +3183,8 @@ int main(int argc, char **argv) {
                                             g_shattered = 0;
                                         }
                                     }
-                                } else if (ch == '+' || ch == '=') { g_speed += SPEED_STEP; if (g_speed > MAX_SPEED) g_speed = MAX_SPEED; }
-                                else if (ch == '-' || ch == '_') { g_speed -= SPEED_STEP; if (g_speed < MIN_SPEED) g_speed = MIN_SPEED; }
+                                } else if (ch == '+' || ch == '=' || ch == ']') { g_speed += SPEED_STEP; if (g_speed > MAX_SPEED) g_speed = MAX_SPEED; }
+                                else if (ch == '-' || ch == '_' || ch == '[') { g_speed -= SPEED_STEP; if (g_speed < MIN_SPEED) g_speed = MIN_SPEED; }
                                 else if (vk == VK_PRIOR) apply_lod(-1);
                                 else if (vk == VK_NEXT)  apply_lod(1);
                                 else if (vk == VK_HOME)  g_show_fps = !g_show_fps;

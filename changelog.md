@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `ascii3D.ini` next to the exe (command-line options win; snapshots, exports,
   `--bench` and `--webcam` ignore it).
 - `--filter` is ignored outside `--snapshot`.
+- `x` toggles 2x2 edge supersampling; `[` / `]` are aliases for `-` / `+`.
+- Status line: the version is gone, `Shift`+`H` / `--hud compact` give a short
+  form (`cube  15 deg/s  tilt 0 deg`); the mode and the quality setting are saved.
+- Model list: a real scrollbar in the last column (`^`, `#` thumb, `v`) and a
+  `~` marker where a long name is cut off.
+- The help box says so when the console is too small for it.
 - Fuzzing: a libFuzzer + AddressSanitizer harness for all eight loaders
   (`tests/fuzz`, built with `build_fuzz.bat`, run with `run_fuzz.ps1`) and a
   `fuzz` workflow that fuzzes each format for 30 s per push. `loader_load` is

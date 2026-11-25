@@ -136,6 +136,7 @@ build\ascii3D.exe -s cube
 | `--shatter` | With `--snapshot`: shatter the solid and simulate the fall. |
 | `--sim <sec>` | With `--shatter`: how many seconds to simulate (default: `3`). |
 | `--menu` | With `--snapshot`: also draw the model list (preview). |
+| `--hud <mode>` | Status line: `full`, `compact` or `off` (default `full`; `Shift`+`H` also saved). |
 | `--filter <text>` | With `--snapshot --menu`: filter the model list by name (substring, case-insensitive). |
 | `--lod <level>` | With `--snapshot`: render at a given LOD level (`0`..`6`). |
 | `--bench <frames>` | Benchmark offscreen rendering (`ms/frame`, `fps`) and exit. |
@@ -193,7 +194,9 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 | `g` / `p` | Export a full 360-degree turn as an animated GIF / APNG (current colours, tilt and speed; transparent background, no HUD). |
 | `R` | Rescan the `models/` folder now. |
 | `?` / `F1` | Show a key help box; any key closes it. |
-| `H` | Show / hide the status line (top-left). |
+| `h` / `Shift`+`H` | Hide / show the status line (top-left); `Shift`+`H` switches it between full and compact. `--hud full\|compact\|off` sets the start mode. |
+| `x` | Toggle 2x2 edge supersampling (quality vs. speed). Exports follow the current setting; saved in `ascii3D.ini`. |
+| `[` / `]` | Same as `-` / `+` (spin speed). Useful on layouts where `+` needs a modifier. |
 | `K` / `Pause` | Pause / resume the spin (and the shatter fall). |
 | `q` | Quit (convenience alias for `ESC`). |
 

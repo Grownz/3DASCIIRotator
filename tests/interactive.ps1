@@ -37,6 +37,9 @@ try {
     $t = Screen '? SNAP ESC ESC';                  Check 'help box is drawn on screen' ($t -match 'ESC / q\s+quit' -and $t -match 'any key closes')
     $t = Screen 'h SNAP ESC';                      Check 'h hides the status line' ($t -notmatch '3D ASCII Rotator')
     $t = Screen 'k SNAP k ESC';                    Check 'k shows paused in the status line' ($t -match '\(paused\)')
+    $t = Screen 'H SNAP H ESC';                    Check 'Shift+H gives the compact status line without version' ($t -match '\w+\s+\d+ deg/s\s+tilt' -and $t -notmatch 'v3\.' -and $t -notmatch '\[ESC\] quit')
+    $t = Screen 'x SNAP x ESC';                    Check 'x reports the quality mode' ($t -match 'quality: one sample per cell')
+    $s = Run ']  ] ESC';                           Check '] raises the spin speed like +' ([int]$s.speed -ge 10)
     $s = Run '? ESC HOME ESC';                     Check 'help closes without quitting; Home toggles FPS' ($s.fps -eq '1')
 } finally {
     Remove-Item $out -ErrorAction SilentlyContinue

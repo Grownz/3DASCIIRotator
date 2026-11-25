@@ -38,6 +38,18 @@ try {
     $with = (& $exe --snapshot -s cube 2>$null) -join "`n"
 } finally { Remove-Item $ini -ErrorAction SilentlyContinue }
 Check 'snapshot ignores ascii3D.ini' ($with -eq $base -and $base.Length -gt 0)
+# scrollbar and truncation marker need a list longer than the panel and a long name
+$md = Join-Path $root 'build\models'
+$many = 1..30 | ForEach-Object { Join-Path $md ("many_{0:D2}.stl" -f $_) }
+$long = Join-Path $md 'a_really_long_model_name_that_cannot_fit_the_panel.stl'
+try {
+    $many + $long | ForEach-Object { Copy-Item (Join-Path $md 'tet_stl.stl') $_ }
+    $m = (& $exe --snapshot -s cube --menu 2>$null)
+    $last = ($m | ForEach-Object { $_.Substring($_.Length - 1) }) -join ''
+    Check 'list scrollbar (^ # v in the last column)' ($last -match '\^' -and $last -match '#' -and $last -match 'v')
+    $m2 = (& $exe --snapshot -s a_really_long_model_name_that_cannot_fit_the_panel --menu 2>$null) -join "`n"
+    Check 'cut-off names get a ~ marker' ($m2 -match 'a_really\S*~')
+} finally { $many + $long | ForEach-Object { Remove-Item $_ -ErrorAction SilentlyContinue } }
 & $exe --version | Out-Null; Check 'version' ($LASTEXITCODE -eq 0)
 & $exe --help    | Out-Null; Check 'help'    ($LASTEXITCODE -eq 0)
 & $exe --snapshot -s doesnotexist 2>&1 | Out-Null; Check 'unknown shape fails' ($LASTEXITCODE -ne 0)

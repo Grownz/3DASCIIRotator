@@ -7,7 +7,7 @@ are not lost. Effort/impact are rough.
 | --- | --- | --- | --- |
 | (done) Move the key hints out of the HUD into a help overlay (`?` / `F1`) | HUD | S | high |
 | (done) HUD on/off (`H`) | HUD | S | high |
-| HUD compact mode (`--hud full|compact|off`); drop the version from it | HUD | S | medium |
+| (done) HUD compact mode (`Shift+H`, `--hud`: full, compact or off) and no version in it | HUD | S | medium |
 | (done) Filter/search in the model list (`/`, type to filter) | list | M | high |
 | (done) Hex/RGB label + reset (`Del`) for the colour sliders | sliders | S | medium |
 | (done) Mark the *currently loaded* model in the list (not just the cursor) | list | S | medium |
@@ -19,9 +19,9 @@ are not lost. Effort/impact are rough.
 | (done) Remember settings between runs (shape, speed, tilt, colours, FPS) | settings | M | medium |
 | Mouse drag to rotate / tilt | input | L | medium |
 | Ramp / theme presets | rendering | M | medium |
-| Quality toggle (supersampling) in the UI | rendering | S | medium |
-| `[` / `]` as alternatives to `+` / `-` | input | S | low |
-| Real scrollbar + clearer truncation marker in the list | list | S | low |
+| (done) Quality toggle (supersampling, `x`) in the UI | rendering | S | medium |
+| (done) `[` / `]` as alternatives to `+` / `-` | input | S | low |
+| (done) Real scrollbar + clearer truncation marker in the list | list | S | low |
 | Configurable / remembered panel width | list | M | low |
 
 ## HUD / status line
