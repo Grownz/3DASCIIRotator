@@ -1505,6 +1505,7 @@ static void draw_menu(char *grid, int cols, int rows) {
     int b0, nmatch, srank;
     if (pw < 12) pw = 12;
     if (pw > cols - 4) pw = cols - 4;
+    g_menu_x0 = -1;                        /* no stale panel position on tiny consoles */
     if (pw < 4) return;
     x0 = cols - pw;
     g_menu_x0 = x0;
