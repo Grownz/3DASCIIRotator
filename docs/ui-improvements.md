@@ -1,20 +1,19 @@
 # UI ideas (backlog)
 
-A running list of possible UI/UX improvements, noted for later. **Nothing here
-is scheduled or implemented yet** — the file only records the ideas so they are
-not lost. Effort/impact are rough.
+A running list of possible UI/UX improvements, noted for later. Items marked **(done)** shipped in 3.1.0; the rest only records ideas so they
+are not lost. Effort/impact are rough.
 
 | Idea | Area | Effort | Impact |
 | --- | --- | --- | --- |
-| Move the key hints out of the HUD into a help overlay (`?` / `F1`) | HUD | S | high |
-| HUD on/off (`H`) + compact mode; drop the version from it | HUD | S | high |
+| (done) Move the key hints out of the HUD into a help overlay (`?` / `F1`) | HUD | S | high |
+| (done) HUD on/off (`H`) + compact mode; drop the version from it | HUD | S | high |
 | Filter/search in the model list (type to filter) | list | M | high |
 | Hex/RGB label + reset for the colour sliders | sliders | S | medium |
-| Mark the *currently loaded* model in the list (not just the cursor) | list | S | medium |
+| (done) Mark the *currently loaded* model in the list (not just the cursor) | list | S | medium |
 | Group the list into "built-in" vs "models/" | list | S | medium |
 | Export progress (`frame n/N`) + cancel | feedback | M | medium |
 | Loading indicator for large models | feedback | M | medium |
-| Pause key; reverse shape cycle; direct shape jump (1-9) | input | S | medium |
+| (done) Pause key; reverse shape cycle; direct shape jump (1-9) | input | S | medium |
 | Remember settings between runs (shape, speed, tilt, colours, FPS) | settings | M | medium |
 | Mouse drag to rotate / tilt | input | L | medium |
 | Ramp / theme presets | rendering | M | medium |

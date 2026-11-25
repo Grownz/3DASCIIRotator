@@ -4,6 +4,16 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.1.0] - 2026-11-25
+
+### Added
+- Key help box (`?` / `F1`); any key closes it. The status line now only
+  shows `[?] help` instead of the long key list.
+- `H` shows / hides the status line.
+- `K` / `Pause` pauses and resumes the spin and the shatter fall.
+- The model list marks the currently loaded model with `*`.
+- GitHub Actions build and smoke tests (`tests/smoke.ps1`).
+
 ## [3.0.0] - 2026-10-21
 
 A major release focused on robustness, the supported formats and a smoother

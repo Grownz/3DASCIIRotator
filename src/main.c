@@ -1,5 +1,5 @@
 ﻿/* ============================================================================
- * 3D ASCII Rotator - version 3.0.0
+ * 3D ASCII Rotator - version 3.1.0
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -50,7 +50,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "3.0.0"
+#define APP_VERSION "3.1.0"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -147,6 +147,8 @@ static int grow_buf(void **p, int *cap, size_t elem, int n) {
 
 static int cellfg_ensure(int n) { return grow_buf((void **)&g_cellfg, &g_cellfg_cap, sizeof(short), n); }
 static int lum_ensure(int n)    { return grow_buf((void **)&g_lum, &g_lum_cap, sizeof(double), n); }
+static int    g_help = 0, g_hud_on = 1, g_paused = 0;
+static int    g_help_x0 = 0, g_help_y0 = 0, g_help_w = 0, g_help_h = 0;   /* help box (0 = not drawn) */
 static int    g_hud_len = 0, g_msg_len = 0, g_fps_len = 0, g_menu_x0 = -1, g_rows = 0;
 
 /* Usable 256-colour indices: everything except black (0) and the five
@@ -275,6 +277,7 @@ static int cc_ensure(int n) { return grow_buf((void **)&g_cc, &g_cc_cap, sizeof(
 
 /* Is this character cell part of the UI (HUD / message / FPS / menu)? */
 static int is_ui_cell(int r, int c) {
+    if (g_help_w > 0 && r >= g_help_y0 && r < g_help_y0 + g_help_h && c >= g_help_x0 && c < g_help_x0 + g_help_w) return 1;
     if (r == 0) return c < g_hud_len;
     if (r == 1 && c < g_msg_len) return 1;
     if (g_show_fps && r == g_rows - 1 && c < g_fps_len) return 1;
@@ -1344,21 +1347,21 @@ static void draw_hud(char *grid, int cols, int rows) {
     int n, i;
     if (g_webcam) {
         _snprintf(hud, sizeof(hud),
-                  " %s v%s  |  webcam: %s  |  [ESC] quit  [POS1] fps ",
+                  " %s v%s  |  webcam: %s  |  [ESC] quit  [?] help ",
                   APP_NAME, APP_VERSION, webcam_device_name());
     } else if (g_shattered) {
         _snprintf(hud, sizeof(hud),
                   " %s v%s  |  shape: %s  |  tilt: %d deg   "
-                  "[ESC] quit   [ENTER] rebuild   [SPACE] next shape ",
+                  "[ESC] quit   [ENTER] rebuild   [?] help ",
                   APP_NAME, APP_VERSION, g_shape_name, (int)g_tilt);
     } else {
         _snprintf(hud, sizeof(hud),
-                  " %s v%s  |  shape: %s  |  spin: %d deg/s  |  tilt: %d deg   "
-                  "[ESC] quit  [-/+] speed  [up/down] tilt  [SPACE] next shape  [ENTER] shatter ",
-                  APP_NAME, APP_VERSION, g_shape_name, (int)(g_speed + 0.5), (int)g_tilt);
+                  " %s v%s  |  shape: %s  |  spin: %d deg/s%s  |  tilt: %d deg   "
+                  "[ESC] quit  [?] help ",
+                  APP_NAME, APP_VERSION, g_shape_name, (int)(g_speed + 0.5), g_paused ? " (paused)" : "", (int)g_tilt);
     }
     hud[sizeof(hud) - 1] = '\0';
-    n = (int)strlen(hud);
+    n = g_hud_on ? (int)strlen(hud) : 0;     /* [h] hides this line only */
     if (n > cols) n = cols;
     for (i = 0; i < n; ++i) grid[i] = hud[i];
     g_hud_len = n;
@@ -1432,6 +1435,35 @@ static void draw_color_slider(char *grid, int cols, int rows, int x0, int r0,
     }
 }
 
+/* Centered key-help box; any key closes it. Clipped to the grid. */
+static void draw_help(char *grid, int cols, int rows) {
+    static const char *L[] = {
+        "ESC / q    quit",           "SPACE      next shape",
+        "TAB        model list",     "UP / DOWN  tilt",
+        "+ / -      spin speed",     "k / PAUSE  pause",
+        "ENTER      shatter",        "a          up axis",
+        "PGUP/PGDN  LOD",            "g / p      export GIF / PNG",
+        "r          rescan models",  "h          hide HUD",
+        "HOME       FPS",            "TAB+LEFT/RIGHT/c  colours",
+        "? / F1     this help",      "any key closes"
+    };
+    int n = (int)(sizeof(L) / sizeof(L[0])), w = 0, i, k, r, c, x0, y0;
+    for (i = 0; i < n; ++i) { int len = (int)strlen(L[i]); if (len > w) w = len; }
+    w += 4;
+    g_help_w = 0;
+    if (w > cols || n + 2 > rows) return;      /* too small: draw nothing */
+    x0 = (cols - w) / 2; y0 = (rows - (n + 2)) / 2;
+    for (r = 0; r < n + 2; ++r)
+        for (c = 0; c < w; ++c) {
+            char ch = ' ';
+            if (r == 0 || r == n + 1) ch = (c == 0 || c == w - 1) ? '+' : '-';
+            else if (c == 0 || c == w - 1) ch = '|';
+            else if (c >= 2 && (k = c - 2) < (int)strlen(L[r - 1])) ch = L[r - 1][k];
+            grid[(size_t)(y0 + r) * cols + x0 + c] = ch;
+        }
+    g_help_x0 = x0; g_help_y0 = y0; g_help_w = w; g_help_h = n + 2;
+}
+
 /* Right-hand model list (Tab): about a quarter of the width, top to bottom. */
 static void draw_menu(char *grid, int cols, int rows) {
     int pw = cols / 4;
@@ -1475,9 +1507,10 @@ static void draw_menu(char *grid, int cols, int rows) {
         int avail, k;
         r = 1 + i;
         grid[(size_t)r * cols + (x0 + 1)] = (idx == g_menu_sel) ? '>' : ' ';
-        avail = cols - x0 - 2;                 /* name cells (up to the last column) */
+        grid[(size_t)r * cols + (x0 + 2)] = (idx == g_item_index) ? '*' : ' ';   /* currently loaded */
+        avail = cols - x0 - 3;                 /* name cells (up to the last column) */
         if (avail < 1) avail = 1;
-        for (k = 0; k < avail && k < (int)sizeof(g_items[idx].name) - 1 && nm[k]; ++k) grid[(size_t)r * cols + (x0 + 2 + k)] = nm[k];
+        for (k = 0; k < avail && k < (int)sizeof(g_items[idx].name) - 1 && nm[k]; ++k) grid[(size_t)r * cols + (x0 + 3 + k)] = nm[k];
         if (nm[k]) grid[(size_t)r * cols + (cols - 1)] = '~';   /* truncated */
     }
     if (g_menu_scroll > 0)
@@ -2160,6 +2193,9 @@ static void print_help(void) {
         "                       reduced from too many triangles\n"
         "  A                    Cycle the model up axis (z -> y -> x)\n"
         "  POS1 (HOME)          Toggle the FPS display (bottom-left)\n"
+        "  ?  / F1              Show the key help box; any key closes it\n"
+        "  H                    Show / hide the status line (top-left)\n"
+        "  K / PAUSE            Pause / resume the spin (and the shatter fall)\n"
         "  g / p                Export a full 360-degree turn as an animated\n"
         "                       GIF / APNG (current colours, tilt and speed;\n"
         "                       transparent background, no HUD)\n"
@@ -2934,7 +2970,13 @@ int main(int argc, char **argv) {
                         if (r->EventType == KEY_EVENT && r->Event.KeyEvent.bKeyDown) {
                             WORD vk = r->Event.KeyEvent.wVirtualKeyCode;
                             char ch = r->Event.KeyEvent.uChar.AsciiChar;
-                            if (g_webcam) {
+                            if (g_help) { if (vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU) g_help = 0; }   /* any key closes it; a bare modifier must not (Shift+? would reopen) */
+                            else if (vk == VK_F1 || ch == '?') g_help = 1;
+                            else if (ch == 'h' || ch == 'H') g_hud_on = !g_hud_on;
+                            else if (!g_webcam && (vk == VK_PAUSE || ch == 'k' || ch == 'K')) {
+                                g_paused = !g_paused;
+                                msg_setf(g_paused ? "paused" : "resumed");
+                            } else if (g_webcam) {
                                 if (vk == VK_ESCAPE || ch == 'q' || ch == 'Q') g_running = 0;
                                 else if (vk == VK_HOME) g_show_fps = !g_show_fps;
                             } else if (g_menu_open) {
@@ -3066,16 +3108,17 @@ int main(int argc, char **argv) {
                 msg_setf("webcam: capture stopped");
             }
         } else if (!g_shattered) {
-            angle_deg += g_speed * dt;
+            if (!g_paused) angle_deg += g_speed * dt;
             while (angle_deg >= 360.0) angle_deg -= 360.0;
             g_angle = angle_deg * (PI / 180.0);
             render_grid(grid, cols, rows);
         } else {
-            shatter_step(dt);
+            if (!g_paused) shatter_step(dt);
             shatter_draw(grid, cols, rows);
         }
         draw_hud(grid, cols, rows);
         if (g_menu_open && !g_webcam) draw_menu(grid, cols, rows);
+        if (g_help) draw_help(grid, cols, rows); else g_help_w = 0;
 
         /* --- present (per-cell colour) -------------------------------- */
         {

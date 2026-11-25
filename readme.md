@@ -185,6 +185,9 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 | `Pos1` / `Home` | Toggle the FPS display in the bottom-left corner. |
 | `g` / `p` | Export a full 360-degree turn as an animated GIF / APNG (current colours, tilt and speed; transparent background, no HUD). |
 | `R` | Rescan the `models/` folder now. |
+| `?` / `F1` | Show a key help box; any key closes it. |
+| `H` | Show / hide the status line (top-left). |
+| `K` / `Pause` | Pause / resume the spin (and the shatter fall). |
 | `q` | Quit (convenience alias for `ESC`). |
 
 ## Bring your own models
