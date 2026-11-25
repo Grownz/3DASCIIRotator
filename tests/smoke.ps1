@@ -65,6 +65,9 @@ try {
     Copy-Item (Join-Path $md 'tet_stl.stl') $mf
     Set-Content (Join-Path $dd 'notes.txt') 'x'
     $r = Snap @('--snapshot', $mf);                  Check 'model file argument loads' ($r.Code -eq 0 -and $r.Ink -gt 50)
+    Push-Location $dd
+    try { $r = Snap @('--snapshot', ".\$([IO.Path]::GetFileName($mf))"); Check 'relative model file path works' ($r.Code -eq 0 -and $r.Ink -gt 50) } finally { Pop-Location }
+    $r = Snap @('--snapshot', '-s', 'cube', $mf);    Check '-s wins over a model file argument' ($r.Code -eq 0 -and $r.Ink -gt 1000)
     $r = Snap @('--snapshot', (Join-Path $dd 'missing.stl'));  Check 'missing model file fails' ($r.Code -ne 0)
     $r = Snap @('--snapshot', (Join-Path $dd 'notes.txt'));    Check 'unsupported model file fails' ($r.Code -ne 0)
 } finally { Remove-Item $dd -Recurse -Force -ErrorAction SilentlyContinue }

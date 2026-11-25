@@ -2011,13 +2011,14 @@ static void models_poll(int force) {
         } while (FindNextFileW(h, &fd));
         FindClose(h);
     }
-    if (g_extra_model[0] && ne < (int)(sizeof(ents) / sizeof(ents[0]))) {   /* file named on the command line */
+    if (g_extra_model[0]) {   /* file named on the command line */
         WIN32_FILE_ATTRIBUTE_DATA fa;
         int dup = 0;
         for (i = 0; i < ne; ++i) if (_wcsicmp(ents[i].path, g_extra_model) == 0) dup = 1;   /* already in models/ */
         if (!dup && GetFileAttributesExW(g_extra_model, GetFileExInfoStandard, &fa) &&
             !(fa.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-            DirEnt *d = &ents[ne++];
+            int cap = (int)(sizeof(ents) / sizeof(ents[0]));
+            DirEnt *d = &ents[ne < cap ? ne++ : cap - 1];   /* a full scan makes room for it */
             const wchar_t *base = wcsrchr(g_extra_model, L'\\');
             base = base ? base + 1 : g_extra_model;
             wcsncpy(d->path, g_extra_model, MAX_PATH - 1); d->path[MAX_PATH - 1] = L'\0';
@@ -2027,6 +2028,10 @@ static void models_poll(int force) {
         }
     }
     qsort(ents, (size_t)ne, sizeof(DirEnt), dir_cmp);
+    if (g_extra_model[0] && ne > MAX_MODELS) {      /* the command-line file must survive the MAX_MODELS cut */
+        for (i = MAX_MODELS; i < ne; ++i)
+            if (_wcsicmp(ents[i].path, g_extra_model) == 0) { DirEnt t = ents[MAX_MODELS - 1]; ents[MAX_MODELS - 1] = ents[i]; ents[i] = t; }
+    }
 
     sig[0] = '\0';
     for (i = 0; i < ne; ++i) {
@@ -2086,7 +2091,7 @@ static void print_help(void) {
         "Usage:\n"
         "  ascii3D [options] [model-file]\n\n"
         "A model file (.stl .obj .ply .off .gltf .glb .3mf .fbx) given as an argument\n"
-        "is added to the list and shown first; dropping a file on ascii3D.exe in\n"
+        "is added to the list and selected; dropping a file on ascii3D.exe in\n"
         "Explorer does the same. The file stays where it is (nothing is copied).\n\n"
         "Options:\n"
         "  -s, --shape <name>   Shape to render: cube | cylinder | diamond |\n"
@@ -2841,6 +2846,7 @@ static void settings_save(void) {
     _snwprintf(w, 64, L"%d", g_panel_pct);           w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"panel", w, g_ini_path);
     _snwprintf(w, 64, L"%d", g_hq ? 1 : 0);          w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"quality", w, g_ini_path);
     if (!g_hud_arg) { _snwprintf(w, 64, L"%d", g_hud_mode ? 1 : 0); w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"hud", w, g_ini_path); }   /* a one-off --hud is not saved */
+    if (g_file_arg >= 0) return;                    /* a one-off model file does not replace the saved shape */
     for (i = 0; g_shape_name_buf[i] && i < 63; ++i) {
         if ((unsigned char)g_shape_name_buf[i] < 32 || (unsigned char)g_shape_name_buf[i] > 126) { i = 0; break; }   /* non-ASCII: save no shape */
         w[i] = (wchar_t)g_shape_name_buf[i];
@@ -2938,20 +2944,32 @@ static int run_snapshot(HANDLE h_out, int is_console) {
 }
 
 /* The index-th command-line token as UTF-16 (argv is ANSI and would mangle non-ANSI file names).
- * Same quoting rules as the C runtime for ordinary paths. */
+ * Follows the C runtime's rules: 2n backslashes before a quote give n backslashes and toggle
+ * the quote, 2n+1 give n backslashes and a literal quote. Returns 0 if the token is empty or too long. */
 static int wide_arg(int index, wchar_t *out, int cap) {
     const wchar_t *q = GetCommandLineW();
     int tok = 0;
     while (q && *q) {
-        int n = 0, inq = 0;
+        int n = 0, inq = 0, over = 0;
         while (*q == L' ' || *q == L'\t') ++q;
         if (!*q) break;
-        while (*q && (inq || (*q != L' ' && *q != L'\t'))) {
-            if (*q == L'"') { inq = !inq; ++q; continue; }
-            if (tok == index && n < cap - 1) out[n++] = *q;
+#define WIDE_PUT(c) do { if (tok == index) { if (n < cap - 1) out[n++] = (c); else over = 1; } } while (0)
+        for (;;) {
+            int bs = 0, k;
+            while (*q == L'\\') { ++bs; ++q; }
+            if (*q == L'"') {
+                for (k = 0; k < bs / 2; ++k) WIDE_PUT(L'\\');
+                if (bs & 1) WIDE_PUT(L'"'); else inq = !inq;
+                ++q;
+                continue;
+            }
+            for (k = 0; k < bs; ++k) WIDE_PUT(L'\\');
+            if (!*q || (!inq && (*q == L' ' || *q == L'\t'))) break;
+            WIDE_PUT(*q);
             ++q;
         }
-        if (tok == index) { out[n] = L'\0'; return n > 0; }
+#undef WIDE_PUT
+        if (tok == index) { out[n] = L'\0'; return n > 0 && !over; }
         ++tok;
     }
     return 0;
