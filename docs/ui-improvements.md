@@ -11,7 +11,7 @@ are not lost. Effort/impact are rough.
 | (done) Filter/search in the model list (`/`, type to filter) | list | M | high |
 | (done) Hex/RGB label + reset (`Del`) for the colour sliders | sliders | S | medium |
 | (done) Mark the *currently loaded* model in the list (not just the cursor) | list | S | medium |
-| Group the list into "built-in" vs "models/" | list | S | medium |
+| (dropped) Group the list into "built-in" vs "models/" - since 3.2.0 only the four analytic shapes are built in and the rest are files; the `*` marker, the filter and `1`-`9` cover the need | list | S | medium |
 | (done) Export progress (`frame n/N`, already shown before) + `Esc` to cancel | feedback | M | medium |
 | (done) Loading indicator for large models | feedback | M | medium |
 | (done) Pause key (`K` / `Pause`) | input | S | medium |
