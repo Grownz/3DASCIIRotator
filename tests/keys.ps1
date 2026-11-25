@@ -1,5 +1,5 @@
 # Injects key events into the console of a child process (helper for tests/interactive.ps1).
-param([string]$Exe, [string]$Keys, [int]$StartupMs = 1500)
+param([string]$Exe, [string]$Keys, [int]$StartupMs = 1500, [string]$SnapFile = "")
 Add-Type -TypeDefinition @'
 using System; using System.Runtime.InteropServices;
 public static class Inj {
@@ -29,6 +29,23 @@ public static class Inj {
     FreeConsole();
     return ok ? "sent " + w : "write failed " + Marshal.GetLastWin32Error();
   }
+  [StructLayout(LayoutKind.Sequential)] public struct CSBI { public short sx, sy, cx, cy; public ushort attr; public short l, t, r, b, mx, my; }
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetConsoleScreenBufferInfo(IntPtr h, out CSBI i);
+  [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] static extern bool ReadConsoleOutputCharacterW(IntPtr h, System.Text.StringBuilder sb, uint n, uint coord, out uint read);
+  public static string Snap(uint pid) {
+    FreeConsole();
+    if (!AttachConsole(pid)) return "attach failed " + Marshal.GetLastWin32Error();
+    IntPtr h = CreateFileW("CONOUT$", 0xC0000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
+    CSBI i; if (!GetConsoleScreenBufferInfo(h, out i)) { FreeConsole(); return "info failed"; }
+    System.Text.StringBuilder all = new System.Text.StringBuilder();
+    for (int y = i.t; y <= i.b; y++) {
+      System.Text.StringBuilder sb = new System.Text.StringBuilder(i.sx + 1); uint rd;
+      ReadConsoleOutputCharacterW(h, sb, (uint)i.sx, (uint)((ushort)0 | ((uint)(ushort)y << 16)), out rd);
+      all.AppendLine(sb.ToString().TrimEnd());
+    }
+    FreeConsole();
+    return all.ToString();
+  }
   [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] static extern IntPtr CreateFileW(string n, uint a, uint s, IntPtr sa, uint d, uint f, IntPtr t);
   static IntPtr CreateFile() { return CreateFileW("CONIN$", 0xC0000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero); }
 }
@@ -39,6 +56,7 @@ $p = Start-Process $Exe -PassThru -WorkingDirectory (Split-Path $Exe)
 Start-Sleep -Milliseconds $StartupMs
 foreach ($t in $Keys.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)) {
     $ctrl = 0
+    if ($t -eq "SNAP") { Start-Sleep -Milliseconds 400; if ($SnapFile) { [Inj]::Snap([uint32]$p.Id) | Add-Content -LiteralPath $SnapFile -Encoding UTF8 }; continue }
     if ($vkmap.ContainsKey($t)) { $vk = $vkmap[$t]; $ch = if ($t -in 'SPACE','SHIFTSPACE') { 32 } elseif ($t -eq 'ENTER') { 13 } elseif ($t -eq 'TAB') { 9 } else { 0 }; if ($t -eq 'SHIFTSPACE') { $ctrl = 0x10 } }
     else { $c = [int][char]$t[0]; $ch = $c; $vk = [int][char]::ToUpper($t[0]) ; if ($t -eq '/') { $vk = 0xBF } }
     $r = [Inj]::Send([uint32]$p.Id, [uint16[]]@($vk), [uint16[]]@($ch), [uint32[]]@($ctrl))

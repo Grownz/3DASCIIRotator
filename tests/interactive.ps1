@@ -15,6 +15,13 @@ function Run($keys) {   # returns the saved settings as a hashtable
     Get-Content $ini | ForEach-Object { if ($_ -match '^(\w+)=(.*)$') { $h[$Matches[1]] = $Matches[2] } }
     $h
 }
+function Screen($keys) {   # returns the console text captured at each SNAP token
+    $f = Join-Path $env:TEMP "a3d_snap_$PID.txt"
+    Remove-Item $f -ErrorAction SilentlyContinue
+    Start-Process pwsh -ArgumentList '-NoProfile','-File',"$PSScriptRoot\keys.ps1",'-Exe',$exe,'-Keys',"`"$keys`"",'-SnapFile',$f `
+        -Wait -WindowStyle Hidden -RedirectStandardOutput $out
+    if (Test-Path $f) { $t = Get-Content $f -Raw; Remove-Item $f; $t } else { '' }
+}
 function Check($name, $ok) { if ($ok) { "ok    $name" } else { "FAIL  $name"; $script:fail++ } }
 
 try {
@@ -27,6 +34,9 @@ try {
     $s = Run 'TAB / s t e ENTER TAB ESC';          Check 'list filter loads the match' ($s.shape -eq 'stego')
     $s = Run 'TAB RIGHT RIGHT RIGHT TAB ESC';      $m = [int]$s.mesh
     $s = Run 'TAB DEL TAB ESC';                    Check 'Del resets the mesh colour' ($m -ne 7 -and $s.mesh -eq '7')
+    $t = Screen '? SNAP ESC ESC';                  Check 'help box is drawn on screen' ($t -match 'ESC / q\s+quit' -and $t -match 'any key closes')
+    $t = Screen 'h SNAP ESC';                      Check 'h hides the status line' ($t -notmatch '3D ASCII Rotator')
+    $t = Screen 'k SNAP k ESC';                    Check 'k shows paused in the status line' ($t -match '\(paused\)')
     $s = Run '? ESC HOME ESC';                     Check 'help closes without quitting; Home toggles FPS' ($s.fps -eq '1')
 } finally {
     Remove-Item $out -ErrorAction SilentlyContinue
