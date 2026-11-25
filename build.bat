@@ -38,7 +38,7 @@ if not exist build\ (
 cl /nologo /O2 /W4 /WX /TC /fp:fast /GL /Oi /Ob3 /arch:AVX /Brepro ^
    /Fd:build\vc.pdb ^
    src\main.c src\loader.c src\simplify.c src\export.c ^
-   src\meshbuf.c src\gltf.c src\inflate.c src\zip3mf.c src\webcam.c src\fbx.c ^
+   src\meshbuf.c src\gltf.c src\inflate.c src\zip3mf.c src\webcam.c src\fbx.c src\shatter.c ^
    /Fe:build\%APP%.exe /Fo:build\ ^
    /link /PDB:build\%APP%.pdb
 if errorlevel 1 (
