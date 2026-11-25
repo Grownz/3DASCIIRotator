@@ -9,13 +9,13 @@ are not lost. Effort/impact are rough.
 | (done) HUD on/off (`H`) | HUD | S | high |
 | HUD compact mode (`--hud full|compact|off`); drop the version from it | HUD | S | medium |
 | (done) Filter/search in the model list (`/`, type to filter) | list | M | high |
-| Hex/RGB label + reset for the colour sliders | sliders | S | medium |
+| (done) Hex/RGB label + reset (`Del`) for the colour sliders | sliders | S | medium |
 | (done) Mark the *currently loaded* model in the list (not just the cursor) | list | S | medium |
 | Group the list into "built-in" vs "models/" | list | S | medium |
 | Export progress (`frame n/N`) + cancel | feedback | M | medium |
 | Loading indicator for large models | feedback | M | medium |
 | (done) Pause key (`K` / `Pause`) | input | S | medium |
-| Reverse shape cycle; direct shape jump (1-9) | input | S | medium |
+| (done) Reverse shape cycle (`Shift+Space`); direct shape jump (`1`-`9`) | input | S | medium |
 | Remember settings between runs (shape, speed, tilt, colours, FPS) | settings | M | medium |
 | Mouse drag to rotate / tilt | input | L | medium |
 | Ramp / theme presets | rendering | M | medium |

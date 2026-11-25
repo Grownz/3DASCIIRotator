@@ -30,6 +30,7 @@ foreach ($l in 0..6) { $r = Snap @('--snapshot','-s','maus','--lod',"$l"); Check
 $m = (& $exe --snapshot -s cube --menu 2>$null) -join "`n"; Check 'menu marks loaded model' ($m -match '\|>\*cube')
 $f = (& $exe --snapshot -s cube --menu --filter ste 2>$null) -join "`n"
 Check 'filter shows stego, hides cube' ($f -match '\|>.stego' -and $f -notmatch '\|[> ]\*?cube')
+Check 'slider hex labels' ($f -match 'mesh #[0-9A-F]{6}' -and $f -match 'light #[0-9A-F]{6}')
 & $exe --version | Out-Null; Check 'version' ($LASTEXITCODE -eq 0)
 & $exe --help    | Out-Null; Check 'help'    ($LASTEXITCODE -eq 0)
 & $exe --snapshot -s doesnotexist 2>&1 | Out-Null; Check 'unknown shape fails' ($LASTEXITCODE -ne 0)

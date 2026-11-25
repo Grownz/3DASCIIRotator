@@ -180,13 +180,15 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 | `-` | Decrease spin speed by 5 deg/s (minimum 5 deg/s). |
 | `Up` / `Down` | Tilt the spin axis away from / towards the viewer in 5 deg steps (maximum 90 deg). Paused while the model list is open. |
 | `Enter` | Shatter the solid; press again to rebuild it. |
-| `Space` | Switch to the next shape; while the model list is open, load the selected model. |
+| `Space` / `Shift`+`Space` | Switch to the next / previous shape; while the model list is open, `Space` loads the selected model. |
+| `1`-`9` | Jump to the shape at that position in the list (positions shift when you add models). |
 | `Tab` | Toggle the model list on the right. While open, `Up`/`Down` or the mouse wheel move the selection (wrapping around at both ends), `Enter`/`Space` load it, and closing with `Tab` loads the current selection. |
 | `/` | In the open model list: type to filter by name (substring, case-insensitive). `Up`/`Down` move within the matches, `Enter` loads the selection, `Backspace` deletes, `Esc` clears the filter. All other keys are typed into the filter while it is active. The filter is reset when the list closes. |
 | `Page Up` / `Page Down` | Weaker / stronger LOD for meshes that were reduced (too many triangles). |
 | `A` | Cycle the model up axis (`z` -> `y` -> `x`). |
 | `Left` / `Right` | In the open model list: move the selected colour slider (applied live, wraps around). |
-| `C` | In the open model list: switch between the mesh and light colour sliders. The active icon is drawn in its colour, the other is greyed out. |
+| `C` | In the open model list: switch between the mesh and light colour sliders. The active icon is drawn in its colour, the other is greyed out. The slider labels show the colour as `#RRGGBB`. |
+| `Del` | In the open model list: reset the selected colour slider to its factory colour (mesh 7, light 15; a `--mesh` / `--light` start colour is not remembered). |
 | `Pos1` / `Home` | Toggle the FPS display in the bottom-left corner. |
 | `g` / `p` | Export a full 360-degree turn as an animated GIF / APNG (current colours, tilt and speed; transparent background, no HUD). |
 | `R` | Rescan the `models/` folder now. |

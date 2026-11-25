@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   containing the text (case-insensitive). `Up`/`Down`/mouse wheel move within
   the matches, `Enter` loads, `Esc` clears. `--filter <text>` previews it with
   `--snapshot --menu`.
+- `Shift`+`Space` switches to the previous shape; `1`-`9` jump to the shape at
+  that list position.
+- The colour sliders show the colour as `#RRGGBB`; `Del` resets the selected
+  slider to its factory colour (mesh 7, light 15).
 
 ## [3.2.0] - 2026-11-25
 

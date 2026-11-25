@@ -1440,13 +1440,14 @@ static void menu_fix_sel(void) {      /* keep the cursor on a matching row */
 /* Centered key-help box; any key closes it. Clipped to the grid. */
 static void draw_help(char *grid, int cols, int rows) {
     static const char *L[] = {
-        "ESC / q    quit",           "SPACE      next shape",
-        "TAB        model list (/ filter)", "UP / DOWN  tilt",
+        "ESC / q    quit",           "SPACE      next (Shift: previous)",
+        "1 - 9      jump to shape",  "TAB        model list (/ filter)",
+        "UP / DOWN  tilt",
         "+ / -      spin speed",     "k / PAUSE  pause",
         "ENTER      shatter",        "a          up axis",
         "PGUP/PGDN  LOD",            "g / p      export GIF / PNG",
         "r          rescan models",  "h          hide HUD",
-        "HOME       FPS",            "TAB+LEFT/RIGHT/c  colours",
+        "HOME       FPS",            "list: LEFT/RIGHT/c/DEL  colour",
         "? / F1     this help",      "any key closes"
     };
     int n = (int)(sizeof(L) / sizeof(L[0])), w = 0, i, k, r, c, x0, y0;
@@ -1533,12 +1534,14 @@ static void draw_menu(char *grid, int cols, int rows) {
     /* --- two colour sliders (bottom third): mesh + light source ----------- */
     {
         char lbl[48];
-        int r0 = b0;
-        _snprintf(lbl, sizeof(lbl), " mesh %d/%d", g_color_sel + 1, COLOR_N);
+        int r0 = b0, pr, pg, pb;
+        palette_rgb(g_fg_color, &pr, &pg, &pb);
+        _snprintf(lbl, sizeof(lbl), " mesh #%02X%02X%02X", pr & 255, pg & 255, pb & 255);
         lbl[sizeof(lbl) - 1] = '\0';
         draw_color_slider(grid, cols, rows, x0, r0, LOGO_MESH, lbl, g_color_sel, g_color_focus == 0);
         r0 += 4;
-        _snprintf(lbl, sizeof(lbl), " light %d/%d", g_light_sel + 1, COLOR_N);
+        palette_rgb(g_light_color, &pr, &pg, &pb);
+        _snprintf(lbl, sizeof(lbl), " light #%02X%02X%02X", pr & 255, pg & 255, pb & 255);
         lbl[sizeof(lbl) - 1] = '\0';
         draw_color_slider(grid, cols, rows, x0, r0, LOGO_LIGHT, lbl, g_light_sel, g_color_focus == 1);
     }
@@ -2194,7 +2197,8 @@ static void print_help(void) {
         "  Up / Down            Tilt the spin axis away from / towards the viewer\n"
         "                       in %d deg steps (max %d deg)\n"
         "  ENTER                Shatter the object; press again to rebuild it\n"
-        "  SPACE                Switch to the next shape (insertion order)\n"
+        "  SPACE / SHIFT+SPACE  Switch to the next / previous shape (list order)\n"
+        "  1 - 9                Jump to the shape at that list position\n"
         "  TAB                  Toggle the model list on the right; pick with\n"
         "                       Up/Down (wraps around; tilt pauses), load with\n"
         "                       SPACE/ENTER, and the selection is loaded when\n"
@@ -2204,6 +2208,8 @@ static void print_help(void) {
         "  LEFT / RIGHT         In the list: move the selected colour slider\n"
         "                       (256-colour scale, applied live, wraps around)\n"
         "  C                    In the list: switch between mesh and light colour\n"
+        "  DEL                  In the list: reset the selected colour slider to\n"
+        "                       its factory colour (mesh 7, light 15)\n"
         "  PAGE UP / PAGE DOWN  Weaker / stronger LOD for meshes that were\n"
         "                       reduced from too many triangles\n"
         "  A                    Cycle the model up axis (z -> y -> x)\n"
@@ -3036,6 +3042,10 @@ int main(int argc, char **argv) {
                                     msg_setf("axis: %s-up", g_up_axis == 0 ? "z" : (g_up_axis == 1 ? "y" : "x"));
                                 }
                                 else if (ch == 'c' || ch == 'C') g_color_focus = !g_color_focus;
+                                else if (vk == VK_DELETE) {   /* reset the focused slider to the factory colour */
+                                    if (g_color_focus) { g_light_color = 15; g_light_sel = colors_index(g_light_color); }
+                                    else               { g_fg_color = 7;     g_color_sel = colors_index(g_fg_color); }
+                                }
                                 else if (vk == VK_LEFT)  { if (g_color_focus) color_step(&g_light_sel, &g_light_color, -1); else color_step(&g_color_sel, &g_fg_color, -1); }
                                 else if (vk == VK_RIGHT) { if (g_color_focus) color_step(&g_light_sel, &g_light_color,  1); else color_step(&g_color_sel, &g_fg_color,  1); }
                                 else if (ch == 'q' || ch == 'Q') g_running = 0;
@@ -3047,7 +3057,8 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_TAB) { g_menu_open = 1; g_menu_sel = g_item_index; g_menu_scroll = 0; }
                                 else if (vk == VK_UP)   { g_tilt += TILT_STEP; if (g_tilt > MAX_TILT) g_tilt = MAX_TILT; }
                                 else if (vk == VK_DOWN) { g_tilt -= TILT_STEP; if (g_tilt < -MAX_TILT) g_tilt = -MAX_TILT; }
-                                else if (vk == VK_SPACE) select_index(g_item_index + 1);
+                                else if (vk == VK_SPACE) select_index(g_item_index + ((r->Event.KeyEvent.dwControlKeyState & SHIFT_PRESSED) ? -1 : 1));
+                                else if (ch >= '1' && ch <= '9') { if (ch - '1' < g_item_count) select_index(ch - '1'); }   /* jump by list position */
                                 else if (vk == VK_RETURN) {
                                     if (grid && cols > 0) {
                                         if (!g_shattered) {
