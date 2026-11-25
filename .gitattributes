@@ -1,3 +1,4 @@
 # Normalize line endings; the repo stores LF.
 * text=auto
 *.bat text eol=crlf
+*.ply binary

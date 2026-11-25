@@ -46,6 +46,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
+REM The shipped meshes (stego, f1, ...) are loaded at runtime from models\ next to the exe.
+if exist models xcopy /y /q /i models build\models >nul
+if errorlevel 1 (
+  echo [error] Copying models\ failed.
+  exit /b 1
+)
+
 echo.
 echo [ok] Built build\%APP%.exe
 echo      Run:  build\%APP%.exe -s cube

@@ -1,5 +1,5 @@
 ﻿/* ============================================================================
- * 3D ASCII Rotator - version 3.1.0
+ * 3D ASCII Rotator - version 3.2.0
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -38,19 +38,11 @@
 #include "export.h"
 #include "webcam.h"
 
-#include "stego_model.h"
-#include "f1_model.h"
-#include "companion_model.h"
-#include "maus_model.h"
-#include "fish_model.h"
-#include "kebab_model.h"
-#include "berlin_model.h"
-#include "china_model.h"
 
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "3.1.0"
+#define APP_VERSION "3.2.0"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -747,23 +739,6 @@ static void setup_fit_cloud(void) {
     }
 }
 
-static MeshDef g_mesh_stego = { STEGO_VERT, STEGO_TRI, STEGO_NVERT, STEGO_NTRI,
-                                NULL, NULL, NULL, 12.0, 1.0 };
-static MeshDef g_mesh_f1    = { F1_VERT, F1_TRI, F1_NVERT, F1_NTRI,
-                                NULL, NULL, NULL, 16.0, 1.0 };
-static MeshDef g_mesh_comp  = { COMPANION_VERT, COMPANION_TRI, COMPANION_NVERT, COMPANION_NTRI,
-                                NULL, NULL, NULL, 18.0, 1.0 };
-static MeshDef g_mesh_maus  = { MAUS_VERT, MAUS_TRI, MAUS_NVERT, MAUS_NTRI,
-                                NULL, NULL, NULL, 12.0, 1.0 };
-static MeshDef g_mesh_fish  = { FISH_VERT, FISH_TRI, FISH_NVERT, FISH_NTRI,
-                                NULL, NULL, NULL, 12.0, 1.0 };
-static MeshDef g_mesh_kebab = { KEBAB_VERT, KEBAB_TRI, KEBAB_NVERT, KEBAB_NTRI,
-                                NULL, NULL, NULL, 14.0, 1.0 };
-static MeshDef g_mesh_berlin = { BERLIN_VERT, BERLIN_TRI, BERLIN_NVERT, BERLIN_NTRI,
-                                NULL, NULL, NULL, 8.0, 1.0 };
-static MeshDef g_mesh_china = { CHINA_VERT, CHINA_TRI, CHINA_NVERT, CHINA_NTRI,
-                                NULL, NULL, NULL, 6.0, 1.0 };
-
 /* ---- registry: built-in shapes + user models, in insertion order --------- */
 
 typedef struct {
@@ -904,14 +879,6 @@ static void build_registry(void) {
     items_add("cylinder",  SH_CYLINDER, NULL);
     items_add("diamond",   SH_DIAMOND,  NULL);
     items_add("sphere",    SH_SPHERE,   NULL);
-    items_add("stego",      -1, &g_mesh_stego);
-    items_add("f1",         -1, &g_mesh_f1);
-    items_add("companion",  -1, &g_mesh_comp);
-    items_add("maus",       -1, &g_mesh_maus);
-    items_add("fish",       -1, &g_mesh_fish);
-    items_add("kebab",      -1, &g_mesh_kebab);
-    items_add("berlin",     -1, &g_mesh_berlin);
-    items_add("china",      -1, &g_mesh_china);
 }
 
 static double shape_sdf(v3 q) {
@@ -2153,9 +2120,9 @@ static void print_help(void) {
         "  ascii3D [options]\n\n"
         "Options:\n"
         "  -s, --shape <name>   Shape to render: cube | cylinder | diamond |\n"
-        "                       sphere | stego | f1 | companion | maus |\n"
-        "                       fish | kebab | berlin | china, or a model\n"
-        "                       name from the models/ folder (default: cube)\n"
+        "                       sphere, or a model name from the models/ folder\n"
+        "                       next to the exe (shipped: stego, f1, companion,\n"
+        "                       maus, fish, kebab, berlin, china; default: cube)\n"
         "  -h, --help           Show this help and exit\n"
         "  -v, --version        Show version and exit\n"
         "      --snapshot       Render a single frame to stdout and exit\n"

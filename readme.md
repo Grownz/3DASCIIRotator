@@ -1,8 +1,8 @@
 # 3D ASCII Rotator
 
 A tiny native Windows x64 console application that renders shaded **3D solids
-as animated ASCII art**. No runtime, no third-party libraries, just one small
-native `.exe`.
+as animated ASCII art**. No runtime and no third-party libraries: one small
+native `.exe` plus a `models/` folder with the shipped meshes.
 
 <p align="center">
   <img src="docs/companion.gif" alt="Rotating companion cube">
@@ -28,7 +28,8 @@ Prebuilt Windows x64 binaries are on the
 - **Twelve shapes.** Cube, cylinder, diamond (octahedron), sphere, a
   stegosaurus, a Formula-style race car, a companion cube, "Die Maus", a trout,
   a kebab, the Brandenburg Gate and a "Tank Man" scene (the latter eight are
-  embedded, ray-traced triangle meshes — see *Third-party assets*).
+  ray-traced triangle meshes shipped as PLY files in `models/`, which must sit
+  next to the executable — see *Third-party assets*).
 - **Cycle at runtime.** The shapes are kept in a list in insertion order;
   press `SPACE` to switch to the next one without restarting.
 - **Bring your own models.** Drop `.stl`, `.obj`, `.ply`, `.off`, `.gltf`,
@@ -80,7 +81,7 @@ Prebuilt Windows x64 binaries are on the
   floor the object was resting on. Press `Enter` again to rebuild it.
 - **Clean exit.** `ESC` restores your console exactly as it was.
 - **Tiny and dependency-free.** Plain C99 compiled with MSVC straight to a
-  native Windows x64 executable.
+  native Windows x64 executable (about 430 KB).
 - **Fast.** Rendering is multi-threaded across all cores (via a lightweight
   blocking worker pool — no OpenMP runtime and no busy-waiting, so idle CPU use
   is minimal), the object/camera transform is hoisted out of the per-ray code,
@@ -99,7 +100,7 @@ Prebuilt Windows x64 binaries are on the
   access for desktop apps (Settings → Privacy → Camera).
 - To build: Visual Studio 2022 or the Visual Studio Build Tools with the
   "Desktop development with C++" workload (MSVC compiler + Windows SDK). No
-  other runtime is required. Regenerating the embedded models additionally
+  other runtime is required. Regenerating the shipped models additionally
   needs Python 3 with numpy and trimesh (and pygltflib for the stegosaurus).
 
 ## Build
@@ -277,30 +278,25 @@ settles into a shallow debris layer on the floor the object was resting on.
   src/export.h          export interface
   src/webcam.c          webcam capture (Media Foundation, loaded dynamically)
   src/webcam.h          webcam interface
-  src/stego_model.h     embedded stegosaurus mesh (generated)
-  src/f1_model.h        embedded F1 car mesh (generated)
-  src/companion_model.h embedded companion cube mesh (generated)
-  src/maus_model.h      embedded "Die Maus" mesh (generated)
-  src/fish_model.h      embedded trout mesh (generated)
-  src/kebab_model.h     embedded kebab mesh (generated)
-  src/berlin_model.h    embedded Brandenburg Gate mesh (generated)
-  src/china_model.h     embedded "Tank Man" scene mesh (generated)
+  models/*.ply          shipped meshes (stego, f1, companion, maus, ...) + .json sidecars
   docs/companion.gif    preview animation (generated)
   docs/moses.gif        preview animation (generated)
   docs/models-feature.md  design notes for user models
   docs/ui-improvements.md UI backlog (ideas, not yet implemented)
-  tools/make_stego_model.py    regenerates src/stego_model.h
-  tools/make_shape_models.py   regenerates the other model headers
+  tools/make_stego_model.py    regenerates models/stego.ply
+  tools/make_shape_models.py   regenerates the other models/*.ply
   tools/make_preview_gif.py    regenerates the preview GIFs (docs/*.gif)
   build.bat             MSVC build script
   readme.md             this file
   changelog.md          version history
 ```
 
-A `models/` folder is created next to the built `ascii3D.exe` on first start;
-it is where user models go and is git-ignored.
+`build.bat` copies the repository's `models/` folder (the shipped meshes)
+next to the built `ascii3D.exe`, and the program loads them from there at
+start-up. The same folder is where your own models go. Without it only the
+four analytic shapes (cube, cylinder, diamond, sphere) are available.
 
-The generated headers are committed, so a normal build only needs MSVC. To
+The generated PLY files are committed, so a normal build only needs MSVC. To
 regenerate them (needs Python 3 with numpy and trimesh; the stegosaurus
 additionally needs pygltflib; the source models are downloaded on demand):
 

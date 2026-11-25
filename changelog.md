@@ -4,6 +4,20 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.2.0] - 2026-11-25
+
+### Changed
+- The eight built-in meshes (stego, f1, companion, maus, fish, kebab, berlin,
+  china) are no longer compiled into the executable. They ship as binary PLY
+  files in `models/` (with `.json` sidecars for the camera elevation) and are
+  loaded at start-up like user models. `build.bat` copies `models/` next to
+  the exe; a release must ship the exe together with that folder. Renders are
+  unchanged (byte-identical snapshots). The exe alone only offers the four
+  analytic shapes.
+- The shipped meshes now appear in folder-scan order in the model list.
+- `tools/make_shape_models.py` and `tools/make_stego_model.py` write PLY files
+  into `models/` instead of C headers.
+
 ## [3.1.0] - 2026-11-25
 
 ### Added
