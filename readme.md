@@ -136,6 +136,7 @@ build\ascii3D.exe -s cube
 | `--shatter` | With `--snapshot`: shatter the solid and simulate the fall. |
 | `--sim <sec>` | With `--shatter`: how many seconds to simulate (default: `3`). |
 | `--menu` | With `--snapshot`: also draw the model list (preview). |
+| `--filter <text>` | With `--snapshot --menu`: filter the model list by name (substring, case-insensitive). |
 | `--lod <level>` | With `--snapshot`: render at a given LOD level (`0`..`6`). |
 | `--bench <frames>` | Benchmark offscreen rendering (`ms/frame`, `fps`) and exit. |
 | `--fps <n>` | Interactive frame-rate cap (`1`..`240`, default `60`; `0` = uncapped). |
@@ -181,6 +182,7 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 | `Enter` | Shatter the solid; press again to rebuild it. |
 | `Space` | Switch to the next shape; while the model list is open, load the selected model. |
 | `Tab` | Toggle the model list on the right. While open, `Up`/`Down` or the mouse wheel move the selection (wrapping around at both ends), `Enter`/`Space` load it, and closing with `Tab` loads the current selection. |
+| `/` | In the open model list: type to filter by name (substring, case-insensitive). `Up`/`Down` move within the matches, `Enter` loads the selection, `Backspace` deletes, `Esc` clears the filter. All other keys are typed into the filter while it is active. The filter is reset when the list closes. |
 | `Page Up` / `Page Down` | Weaker / stronger LOD for meshes that were reduced (too many triangles). |
 | `A` | Cycle the model up axis (`z` -> `y` -> `x`). |
 | `Left` / `Right` | In the open model list: move the selected colour slider (applied live, wraps around). |

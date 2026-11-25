@@ -1,5 +1,5 @@
 ﻿/* ============================================================================
- * 3D ASCII Rotator - version 3.2.0
+ * 3D ASCII Rotator - version 3.3.0
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <ctype.h>
 #include <wchar.h>
 
 #include "loader.h"
@@ -42,7 +43,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "3.2.0"
+#define APP_VERSION "3.3.0"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */
@@ -140,6 +141,8 @@ static int grow_buf(void **p, int *cap, size_t elem, int n) {
 static int cellfg_ensure(int n) { return grow_buf((void **)&g_cellfg, &g_cellfg_cap, sizeof(short), n); }
 static int lum_ensure(int n)    { return grow_buf((void **)&g_lum, &g_lum_cap, sizeof(double), n); }
 static int    g_help = 0, g_hud_on = 1, g_paused = 0;
+static char   g_filter[32] = "";                   /* model-list filter (substring, case-insensitive) */
+static int    g_filter_len = 0, g_filter_edit = 0; /* edit mode: every key goes to the filter */
 static int    g_help_x0 = 0, g_help_y0 = 0, g_help_w = 0, g_help_h = 0;   /* help box (0 = not drawn) */
 static int    g_hud_len = 0, g_msg_len = 0, g_fps_len = 0, g_menu_x0 = -1, g_rows = 0;
 
@@ -1402,11 +1405,43 @@ static void draw_color_slider(char *grid, int cols, int rows, int x0, int r0,
     }
 }
 
+/* ---- model-list filter: indices into g_items that contain g_filter -------- */
+static int item_matches(int idx) {
+    const char *nm;
+    int i, k;
+    if (idx < 0 || idx >= g_item_count) return 0;
+    if (g_filter_len == 0) return 1;
+    nm = g_items[idx].name;
+    for (i = 0; nm[i]; ++i) {
+        for (k = 0; k < g_filter_len && nm[i + k]; ++k)
+            if (tolower((unsigned char)nm[i + k]) != tolower((unsigned char)g_filter[k])) break;
+        if (k == g_filter_len) return 1;
+    }
+    return 0;
+}
+static int menu_count(void) { int i, n = 0; for (i = 0; i < g_item_count; ++i) n += item_matches(i); return n; }
+/* rank-th matching index (0-based), or -1 */
+static int menu_nth(int rank) { int i; for (i = 0; i < g_item_count; ++i) if (item_matches(i) && rank-- == 0) return i; return -1; }
+static int menu_rank(int idx) { int i, n = 0; for (i = 0; i < idx && i < g_item_count; ++i) n += item_matches(i); return n; }
+/* Next matching index in direction dir (+1/-1), wrapping; stays put when nothing matches. */
+static int menu_step(int sel, int dir) {
+    int i;
+    if (g_item_count <= 0) return sel;
+    for (i = 1; i <= g_item_count; ++i) {
+        int j = ((sel + dir * i) % g_item_count + g_item_count) % g_item_count;
+        if (item_matches(j)) return j;
+    }
+    return sel;
+}
+static void menu_fix_sel(void) {      /* keep the cursor on a matching row */
+    if (g_item_count > 0 && !item_matches(g_menu_sel)) { int n = menu_nth(0); if (n >= 0) g_menu_sel = n; }
+}
+
 /* Centered key-help box; any key closes it. Clipped to the grid. */
 static void draw_help(char *grid, int cols, int rows) {
     static const char *L[] = {
         "ESC / q    quit",           "SPACE      next shape",
-        "TAB        model list",     "UP / DOWN  tilt",
+        "TAB        model list (/ filter)", "UP / DOWN  tilt",
         "+ / -      spin speed",     "k / PAUSE  pause",
         "ENTER      shatter",        "a          up axis",
         "PGUP/PGDN  LOD",            "g / p      export GIF / PNG",
@@ -1435,7 +1470,7 @@ static void draw_help(char *grid, int cols, int rows) {
 static void draw_menu(char *grid, int cols, int rows) {
     int pw = cols / 4;
     int x0, listrows, i, r, c;
-    int b0;
+    int b0, nmatch, srank;
     if (pw < 12) pw = 12;
     if (pw > cols - 4) pw = cols - 4;
     if (pw < 4) return;
@@ -1453,10 +1488,13 @@ static void draw_menu(char *grid, int cols, int rows) {
     if (g_menu_sel >= g_item_count) g_menu_sel = g_item_count - 1;
     if (g_menu_sel < 0) g_menu_sel = 0;
 
-    /* scroll the window so the selection stays visible */
-    if (g_menu_sel < g_menu_scroll) g_menu_scroll = g_menu_sel;
-    if (g_menu_sel >= g_menu_scroll + listrows) g_menu_scroll = g_menu_sel - listrows + 1;
-    if (g_menu_scroll > g_item_count - listrows) g_menu_scroll = g_item_count - listrows;
+    /* scroll the window (counted in matching rows) so the selection stays visible */
+    menu_fix_sel();
+    nmatch = menu_count();
+    srank = menu_rank(g_menu_sel);
+    if (srank < g_menu_scroll) g_menu_scroll = srank;
+    if (srank >= g_menu_scroll + listrows) g_menu_scroll = srank - listrows + 1;
+    if (g_menu_scroll > nmatch - listrows) g_menu_scroll = nmatch - listrows;
     if (g_menu_scroll < 0) g_menu_scroll = 0;
 
     for (r = 0; r < rows; ++r) {
@@ -1464,14 +1502,20 @@ static void draw_menu(char *grid, int cols, int rows) {
         grid[(size_t)r * cols + x0] = '|';
     }
     {
-        const char *t = " models ";
+        char title[48];
+        const char *t = title;
+        if (g_filter_edit || g_filter_len) _snprintf(title, sizeof(title), " /%s%s", g_filter, g_filter_edit ? "_" : "");
+        else strcpy(title, " models  [/] filter");
+        title[sizeof(title) - 1] = '\0';
         c = x0 + 1;
         while (*t && c < cols) grid[c++] = *t++;
     }
-    for (i = 0; i < listrows && g_menu_scroll + i < g_item_count; ++i) {
-        int idx = g_menu_scroll + i;
-        const char *nm = g_items[idx].name;
+    for (i = 0; i < listrows && g_menu_scroll + i < nmatch; ++i) {
+        int idx = menu_nth(g_menu_scroll + i);
+        const char *nm;
         int avail, k;
+        if (idx < 0) break;
+        nm = g_items[idx].name;
         r = 1 + i;
         grid[(size_t)r * cols + (x0 + 1)] = (idx == g_menu_sel) ? '>' : ' ';
         grid[(size_t)r * cols + (x0 + 2)] = (idx == g_item_index) ? '*' : ' ';   /* currently loaded */
@@ -1482,8 +1526,9 @@ static void draw_menu(char *grid, int cols, int rows) {
     }
     if (g_menu_scroll > 0)
         grid[(size_t)1 * cols + (cols - 1)] = '^';
-    if (g_menu_scroll + listrows < g_item_count)
+    if (g_menu_scroll + listrows < nmatch)
         grid[(size_t)(b0 - 1) * cols + (cols - 1)] = 'v';
+    if (nmatch == 0 && x0 + 3 + 10 < cols) memcpy(&grid[(size_t)1 * cols + x0 + 3], "(no match)", 10);
 
     /* --- two colour sliders (bottom third): mesh + light source ----------- */
     {
@@ -2132,6 +2177,7 @@ static void print_help(void) {
         "      --shatter        With --snapshot: shatter and simulate the fall\n"
         "      --sim <sec>      With --shatter: seconds to simulate (default: 3)\n"
         "      --menu           With --snapshot: draw the model list (preview)\n"
+        "      --filter <text>  With --snapshot --menu: filter the model list\n"
         "      --lod <level>    With --snapshot: apply an LOD level (0..%d)\n"
         "      --bench <frames> Benchmark offscreen rendering and exit\n"
         "      --fps <n>        Frame-rate cap for interactive mode (default 60)\n"
@@ -2153,6 +2199,8 @@ static void print_help(void) {
         "                       Up/Down (wraps around; tilt pauses), load with\n"
         "                       SPACE/ENTER, and the selection is loaded when\n"
         "                       you close the list with TAB\n"
+        "  /                    In the list: type to filter by name (UP/DOWN pick,\n"
+        "                       ENTER loads, ESC clears the filter)\n"
         "  LEFT / RIGHT         In the list: move the selected colour slider\n"
         "                       (256-colour scale, applied live, wraps around)\n"
         "  C                    In the list: switch between mesh and light colour\n"
@@ -2207,6 +2255,14 @@ static int parse_args(int argc, char **argv) {
             g_list_cams = 1;
         } else if (_stricmp(a, "--menu") == 0) {
             g_menu_start = 1;
+        } else if (_stricmp(a, "--filter") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "error: --filter requires a value\n");
+                return 0;
+            }
+            strncpy(g_filter, argv[++i], sizeof(g_filter) - 1);
+            g_filter[sizeof(g_filter) - 1] = '\0';
+            g_filter_len = (int)strlen(g_filter);
         } else if (_stricmp(a, "--lod") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "error: --lod requires a value\n");
@@ -2938,6 +2994,16 @@ int main(int argc, char **argv) {
                             WORD vk = r->Event.KeyEvent.wVirtualKeyCode;
                             char ch = r->Event.KeyEvent.uChar.AsciiChar;
                             if (g_help) { if (vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU) g_help = 0; }   /* any key closes it; a bare modifier must not (Shift+? would reopen) */
+                            else if (g_filter_edit) {                    /* typing into the list filter: it takes every key */
+                                unsigned char uc = (unsigned char)ch;
+                                if (vk == VK_ESCAPE) { g_filter_edit = 0; g_filter_len = 0; g_filter[0] = '\0'; }
+                                else if (vk == VK_RETURN) { g_filter_edit = 0; if (item_matches(g_menu_sel)) select_index(g_menu_sel); }
+                                else if (vk == VK_UP)   g_menu_sel = menu_step(g_menu_sel, -1);
+                                else if (vk == VK_DOWN) g_menu_sel = menu_step(g_menu_sel, 1);
+                                else if (vk == VK_BACK) { if (g_filter_len > 0) g_filter[--g_filter_len] = '\0'; }
+                                else if (uc >= 32 && uc < 127 && g_filter_len < (int)sizeof(g_filter) - 1) { g_filter[g_filter_len++] = (char)uc; g_filter[g_filter_len] = '\0'; }
+                                menu_fix_sel();
+                            }
                             else if (vk == VK_F1 || ch == '?') g_help = 1;
                             else if (ch == 'h' || ch == 'H') g_hud_on = !g_hud_on;
                             else if (!g_webcam && (vk == VK_PAUSE || ch == 'k' || ch == 'K')) {
@@ -2947,11 +3013,16 @@ int main(int argc, char **argv) {
                                 if (vk == VK_ESCAPE || ch == 'q' || ch == 'Q') g_running = 0;
                                 else if (vk == VK_HOME) g_show_fps = !g_show_fps;
                             } else if (g_menu_open) {
-                                if (vk == VK_TAB) { g_menu_open = 0; select_index(g_menu_sel); }
+                                if (vk == VK_TAB) {
+                                    g_menu_open = 0;
+                                    if (item_matches(g_menu_sel)) select_index(g_menu_sel);
+                                    g_filter_len = 0; g_filter[0] = '\0';   /* the filter lasts for one visit */
+                                }
                                 else if (vk == VK_ESCAPE) g_running = 0;
-                                else if (vk == VK_UP)   { if (g_menu_sel > 0) --g_menu_sel; else g_menu_sel = g_item_count - 1; }
-                                else if (vk == VK_DOWN) { if (g_menu_sel < g_item_count - 1) ++g_menu_sel; else g_menu_sel = 0; }
-                                else if (vk == VK_RETURN || vk == VK_SPACE) select_index(g_menu_sel);
+                                else if (ch == '/') g_filter_edit = 1;
+                                else if (vk == VK_UP)   g_menu_sel = menu_step(g_menu_sel, -1);
+                                else if (vk == VK_DOWN) g_menu_sel = menu_step(g_menu_sel, 1);
+                                else if (vk == VK_RETURN || vk == VK_SPACE) { if (item_matches(g_menu_sel)) select_index(g_menu_sel); }
                                 else if (ch == '+' || ch == '=') { g_speed += SPEED_STEP; if (g_speed > MAX_SPEED) g_speed = MAX_SPEED; }
                                 else if (ch == '-' || ch == '_') { g_speed -= SPEED_STEP; if (g_speed < MIN_SPEED) g_speed = MIN_SPEED; }
                                 else if (vk == VK_PRIOR) apply_lod(-1);
@@ -3006,8 +3077,8 @@ int main(int argc, char **argv) {
                         } else if (r->EventType == MOUSE_EVENT && g_menu_open) {
                             if (r->Event.MouseEvent.dwEventFlags == MOUSE_WHEELED) {
                                 short d = (short)HIWORD(r->Event.MouseEvent.dwButtonState);
-                                if (d > 0) { if (g_menu_sel > 0) --g_menu_sel; else g_menu_sel = g_item_count - 1; }
-                                else if (d < 0) { if (g_menu_sel < g_item_count - 1) ++g_menu_sel; else g_menu_sel = 0; }
+                                if (d > 0) g_menu_sel = menu_step(g_menu_sel, -1);
+                                else if (d < 0) g_menu_sel = menu_step(g_menu_sel, 1);
                             }
                         }
                     }

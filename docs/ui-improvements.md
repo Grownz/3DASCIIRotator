@@ -8,7 +8,7 @@ are not lost. Effort/impact are rough.
 | (done) Move the key hints out of the HUD into a help overlay (`?` / `F1`) | HUD | S | high |
 | (done) HUD on/off (`H`) | HUD | S | high |
 | HUD compact mode (`--hud full|compact|off`); drop the version from it | HUD | S | medium |
-| Filter/search in the model list (type to filter) | list | M | high |
+| (done) Filter/search in the model list (`/`, type to filter) | list | M | high |
 | Hex/RGB label + reset for the colour sliders | sliders | S | medium |
 | (done) Mark the *currently loaded* model in the list (not just the cursor) | list | S | medium |
 | Group the list into "built-in" vs "models/" | list | S | medium |

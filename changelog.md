@@ -4,6 +4,14 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.3.0] - 2026-11-25
+
+### Added
+- Model list filter: press `/` in the list and type; the list shows only names
+  containing the text (case-insensitive). `Up`/`Down`/mouse wheel move within
+  the matches, `Enter` loads, `Esc` clears. `--filter <text>` previews it with
+  `--snapshot --menu`.
+
 ## [3.2.0] - 2026-11-25
 
 ### Changed
