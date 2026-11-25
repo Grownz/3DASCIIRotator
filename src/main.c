@@ -73,6 +73,7 @@
 
 #define PI 3.14159265358979323846
 
+#define DRAG_DEG       3.0   /* degrees of rotation / tilt per cell of mouse drag */
 #define RAMP_N  15            /* every ramp preset has exactly 15 distinct characters */
 
 /* ------------------------------------------------------------------- shapes */
@@ -148,6 +149,7 @@ static int lum_ensure(int n)    { return grow_buf((void **)&g_lum, &g_lum_cap, s
 static int    g_help = 0, g_hud_on = 1, g_paused = 0;
 static int    g_panel_pct = 25;                    /* model-list width in % of the console (15..60, keys , and .) */
 static int    g_ramp_arg = 0;                      /* --ramp given: it wins over the saved preset */
+static int    g_drag_on = 0, g_drag_x = 0, g_drag_y = 0;   /* left-button drag: last cell */
 static int    g_interactive = 0;                   /* 1 only inside the interactive loop: enables ESC-cancel and load notices */
 static int    g_hud_arg = 0;                      /* --hud given: it wins over the saved HUD mode */
 static int    g_hud_mode = 0;                     /* 0 = full status line, 1 = compact (--hud) */
@@ -2256,6 +2258,8 @@ static void print_help(void) {
         "  ?  / F1              Show the key help box; any key closes it\n"
         "  h / SHIFT+H          Hide / show the status line; Shift+H switches it\n"
         "                       between full and compact\n"
+        "  Mouse drag           Left button: drag sideways to spin, up/down to tilt\n"
+        "                       (3 degrees per cell; not over the list or the help box)\n"
         "  T                    Cycle the character ramp (default, soft, bold, airy)\n"
         "  , / .                In the list: narrower / wider list panel (15-60%%)\n"
         "  X                    Toggle 2x2 edge supersampling (quality / speed);\n"
@@ -3274,11 +3278,27 @@ int main(int argc, char **argv) {
                                 else if (ch == 'p' || ch == 'P') export_animation(h_out, is_console, grid, cols, rows, 1);
                                 else if (ch == 'r' || ch == 'R') models_poll(1);
                             }
-                        } else if (r->EventType == MOUSE_EVENT && g_menu_open) {
-                            if (r->Event.MouseEvent.dwEventFlags == MOUSE_WHEELED) {
-                                short d = (short)HIWORD(r->Event.MouseEvent.dwButtonState);
+                        } else if (r->EventType == MOUSE_EVENT) {
+                            const MOUSE_EVENT_RECORD *me = &r->Event.MouseEvent;
+                            if (g_menu_open && me->dwEventFlags == MOUSE_WHEELED) {
+                                short d = (short)HIWORD(me->dwButtonState);
                                 if (d > 0) g_menu_sel = menu_step(g_menu_sel, -1);
                                 else if (d < 0) g_menu_sel = menu_step(g_menu_sel, 1);
+                            } else if (!(me->dwEventFlags & MOUSE_WHEELED)) {
+                                /* drag with the left button: horizontal = spin angle, vertical = tilt */
+                                int left = (me->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+                                int over_list = g_menu_open && g_menu_x0 >= 0 && me->dwMousePosition.X >= g_menu_x0;
+                                if (left && !over_list && !g_webcam && !g_shattered && !g_help && !g_filter_edit) {
+                                    if (g_drag_on && (me->dwEventFlags & MOUSE_MOVED)) {
+                                        angle_deg += (me->dwMousePosition.X - g_drag_x) * DRAG_DEG;
+                                        while (angle_deg >= 360.0) angle_deg -= 360.0;
+                                        while (angle_deg < 0.0)    angle_deg += 360.0;
+                                        g_tilt -= (me->dwMousePosition.Y - g_drag_y) * DRAG_DEG;
+                                        if (g_tilt >  MAX_TILT) g_tilt =  MAX_TILT;
+                                        if (g_tilt < -MAX_TILT) g_tilt = -MAX_TILT;
+                                    }
+                                    g_drag_on = 1; g_drag_x = me->dwMousePosition.X; g_drag_y = me->dwMousePosition.Y;
+                                } else g_drag_on = 0;
                             }
                         }
                     }

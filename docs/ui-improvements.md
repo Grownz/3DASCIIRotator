@@ -17,7 +17,7 @@ are not lost. Effort/impact are rough.
 | (done) Pause key (`K` / `Pause`) | input | S | medium |
 | (done) Reverse shape cycle (`Shift+Space`); direct shape jump (`1`-`9`) | input | S | medium |
 | (done) Remember settings between runs (shape, speed, tilt, colours, FPS) | settings | M | medium |
-| Mouse drag to rotate / tilt | input | L | medium |
+| (done) Mouse drag to rotate / tilt | input | L | medium |
 | (partly done) Ramp presets (`t`, `--ramp`); colour themes are still open | rendering | M | medium |
 | (done) Quality toggle (supersampling, `x`) in the UI | rendering | S | medium |
 | (done) `[` / `]` as alternatives to `+` / `-` | input | S | low |

@@ -196,6 +196,7 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 | `R` | Rescan the `models/` folder now. |
 | `?` / `F1` | Show a key help box; any key closes it. |
 | `h` / `Shift`+`H` | Hide / show the status line (top-left); `Shift`+`H` switches it between full and compact. `--hud full\|compact\|off` sets the start mode. |
+| Mouse drag | Hold the left button and drag: sideways spins the model, up/down tilts the axis (3 degrees per console cell). Not active over the open model list, the help box, in webcam mode or while shattered. |
 | `t` | Cycle the character ramp (`default`, `soft`, `bold`, `airy`); saved in `ascii3D.ini`. |
 | `,` / `.` | In the open model list: narrower / wider panel (15-60 % of the console); saved. |
 | `x` | Toggle 2x2 edge supersampling (quality vs. speed). Exports follow the current setting; saved in `ascii3D.ini`. |

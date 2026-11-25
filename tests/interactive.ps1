@@ -45,6 +45,10 @@ try {
     $s = Run 'TAB , , , , , , , , , , , , , , , ESC ESC'; Check ', narrows the panel down to its 15% minimum' ($s.panel -eq '15')
     Get-ChildItem (Join-Path $root 'build') -Filter 'ascii3D_*.gif' | Remove-Item -ErrorAction SilentlyContinue
     $t = Screen 'g ESC SNAP ESC';                  Check 'Esc cancels an export without leaving a file' ($t -match 'export cancelled' -and -not (Get-ChildItem (Join-Path $root 'build') -Filter 'ascii3D_*.gif'))
+    Remove-Item $ini -ErrorAction SilentlyContinue
+    $s = Run 'DRAG:20,20,20,16 ESC';              Check 'mouse drag upward tilts the axis (+3 deg per row)' ($s.tilt -eq '12')
+    Remove-Item $ini -ErrorAction SilentlyContinue
+    $s = Run 'TAB DRAG:100,5,100,25 ESC ESC';       Check 'dragging over the model list does not tilt' ($s.tilt -eq '0')
     $s = Run '? ESC HOME ESC';                     Check 'help closes without quitting; Home toggles FPS' ($s.fps -eq '1')
 } finally {
     Remove-Item $out -ErrorAction SilentlyContinue
