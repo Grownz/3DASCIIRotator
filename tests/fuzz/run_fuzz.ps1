@@ -10,7 +10,9 @@ $fail = 0
 # the ASan runtime DLL lives next to the compiler; put it on PATH
 $vsw = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $vs  = & $vsw -latest -products * -property installationPath
-$asan = Get-ChildItem (Join-Path $vs 'VC\Tools\MSVC') -Directory | Sort-Object Name | Select-Object -Last 1
+if (-not $vs) { throw 'Visual Studio not found (vswhere returned nothing)' }
+$asan = Get-ChildItem (Join-Path $vs 'VC\Tools\MSVC') -Directory | Sort-Object { [version]$_.Name } | Select-Object -Last 1
+if (-not $asan) { throw 'MSVC toolset folder not found' }
 $env:PATH = (Join-Path $asan.FullName 'bin\Hostx64\x64') + ';' + $env:PATH
 
 foreach ($fmt in 'stl','obj','ply','off','gltf','glb','3mf','fbx') {
