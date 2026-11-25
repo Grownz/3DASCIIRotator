@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Model list: a real scrollbar in the last column (`^`, `#` thumb, `v`) and a
   `~` marker where a long name is cut off.
 - The help box says so when the console is too small for it.
+- `Esc` cancels a running GIF/APNG export (no partial file is left); a
+  `Loading ...` notice shows while a big model is parsed or its BVH is built.
+- `t` / `--ramp` switch between four 15-character ramps (default, soft, bold,
+  airy); `,` / `.` resize the model list panel; both are saved.
+- The model folder limit is 200 files (was 32, which the shipped meshes had started
+  to eat into since 3.2.0).
+- Scrollbar arrows only appear where there is more to scroll to; a one-off
+  `--hud` / `--ramp` is no longer written to `ascii3D.ini`.
 - Fuzzing: a libFuzzer + AddressSanitizer harness for all eight loaders
   (`tests/fuzz`, built with `build_fuzz.bat`, run with `run_fuzz.ps1`) and a
   `fuzz` workflow that fuzzes each format for 30 s per push. `loader_load` is

@@ -12,17 +12,17 @@ are not lost. Effort/impact are rough.
 | (done) Hex/RGB label + reset (`Del`) for the colour sliders | sliders | S | medium |
 | (done) Mark the *currently loaded* model in the list (not just the cursor) | list | S | medium |
 | Group the list into "built-in" vs "models/" | list | S | medium |
-| Export progress (`frame n/N`) + cancel | feedback | M | medium |
-| Loading indicator for large models | feedback | M | medium |
+| (done) Export progress (`frame n/N`, already shown before) + `Esc` to cancel | feedback | M | medium |
+| (done) Loading indicator for large models | feedback | M | medium |
 | (done) Pause key (`K` / `Pause`) | input | S | medium |
 | (done) Reverse shape cycle (`Shift+Space`); direct shape jump (`1`-`9`) | input | S | medium |
 | (done) Remember settings between runs (shape, speed, tilt, colours, FPS) | settings | M | medium |
 | Mouse drag to rotate / tilt | input | L | medium |
-| Ramp / theme presets | rendering | M | medium |
+| (partly done) Ramp presets (`t`, `--ramp`); colour themes are still open | rendering | M | medium |
 | (done) Quality toggle (supersampling, `x`) in the UI | rendering | S | medium |
 | (done) `[` / `]` as alternatives to `+` / `-` | input | S | low |
 | (done) Real scrollbar + clearer truncation marker in the list | list | S | low |
-| Configurable / remembered panel width | list | M | low |
+| (done) Configurable / remembered panel width (`,` `.`) | list | M | low |
 
 ## HUD / status line
 

@@ -40,6 +40,11 @@ try {
     $t = Screen 'H SNAP H ESC';                    Check 'Shift+H gives the compact status line without version' ($t -match '\w+\s+\d+ deg/s\s+tilt' -and $t -notmatch 'v3\.' -and $t -notmatch '\[ESC\] quit')
     $t = Screen 'x SNAP x ESC';                    Check 'x reports the quality mode' ($t -match 'quality: one sample per cell')
     $s = Run ']  ] ESC';                           Check '] raises the spin speed like +' ([int]$s.speed -ge 10)
+    $t = Screen 't SNAP t t t ESC';                Check 't cycles the ramp and says so' ($t -match 'ramp: soft')
+    $s = Run 'TAB . . ESC ESC';                    Check '. widens the list panel and saves it' ([int]$s.panel -ge 35)
+    $s = Run 'TAB , , , , , , , , , , , , , , , ESC ESC'; Check ', narrows the panel down to its 15% minimum' ($s.panel -eq '15')
+    Get-ChildItem (Join-Path $root 'build') -Filter 'ascii3D_*.gif' | Remove-Item -ErrorAction SilentlyContinue
+    $t = Screen 'g ESC SNAP ESC';                  Check 'Esc cancels an export without leaving a file' ($t -match 'export cancelled' -and -not (Get-ChildItem (Join-Path $root 'build') -Filter 'ascii3D_*.gif'))
     $s = Run '? ESC HOME ESC';                     Check 'help closes without quitting; Home toggles FPS' ($s.fps -eq '1')
 } finally {
     Remove-Item $out -ErrorAction SilentlyContinue

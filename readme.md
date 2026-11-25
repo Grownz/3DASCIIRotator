@@ -136,7 +136,8 @@ build\ascii3D.exe -s cube
 | `--shatter` | With `--snapshot`: shatter the solid and simulate the fall. |
 | `--sim <sec>` | With `--shatter`: how many seconds to simulate (default: `3`). |
 | `--menu` | With `--snapshot`: also draw the model list (preview). |
-| `--hud <mode>` | Status line: `full`, `compact` or `off` (default `full`; `Shift`+`H` also saved). |
+| `--hud <mode>` | Status line: `full`, `compact` or `off` (default `full`). A one-off `--hud` / `--ramp` is not written to `ascii3D.ini`. |
+| `--ramp <name>` | Character ramp: `default`, `soft`, `bold` or `airy` (15 characters each). |
 | `--filter <text>` | With `--snapshot --menu`: filter the model list by name (substring, case-insensitive). |
 | `--lod <level>` | With `--snapshot`: render at a given LOD level (`0`..`6`). |
 | `--bench <frames>` | Benchmark offscreen rendering (`ms/frame`, `fps`) and exit. |
@@ -191,10 +192,12 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 | `C` | In the open model list: switch between the mesh and light colour sliders. The active icon is drawn in its colour, the other is greyed out. The slider labels show the colour as `#RRGGBB`. |
 | `Del` | In the open model list: reset the selected colour slider to its factory colour (mesh 7, light 15; a `--mesh` / `--light` start colour is not remembered). |
 | `Pos1` / `Home` | Toggle the FPS display in the bottom-left corner. |
-| `g` / `p` | Export a full 360-degree turn as an animated GIF / APNG (current colours, tilt and speed; transparent background, no HUD). |
+| `g` / `p` | Export a full 360-degree turn as an animated GIF / APNG (current colours, tilt and speed; transparent background, no HUD). The status line shows `frame n/N`; `Esc` cancels and removes the partial file (other keys typed meanwhile are discarded). |
 | `R` | Rescan the `models/` folder now. |
 | `?` / `F1` | Show a key help box; any key closes it. |
 | `h` / `Shift`+`H` | Hide / show the status line (top-left); `Shift`+`H` switches it between full and compact. `--hud full\|compact\|off` sets the start mode. |
+| `t` | Cycle the character ramp (`default`, `soft`, `bold`, `airy`); saved in `ascii3D.ini`. |
+| `,` / `.` | In the open model list: narrower / wider panel (15-60 % of the console); saved. |
 | `x` | Toggle 2x2 edge supersampling (quality vs. speed). Exports follow the current setting; saved in `ascii3D.ini`. |
 | `[` / `]` | Same as `-` / `+` (spin speed). Useful on layouts where `+` needs a modifier. |
 | `K` / `Pause` | Pause / resume the spin (and the shatter fall). |

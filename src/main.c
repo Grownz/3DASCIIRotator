@@ -67,14 +67,13 @@
 #define SUPER_TRIS   100000  /* above this, single sample per cell  */
 #define SUPER_TH       0.03  /* edge threshold for adaptive 2x2 (smooth SDFs) */
 #define SUPER_TH_MESH  0.20  /* ditto for flat-shaded meshes (fewer edges)   */
-#define MAX_MODELS   32      /* max user models kept                */
+#define MAX_MODELS  200      /* max model files kept (shipped meshes included) */
 #define BVH_CACHE     3      /* BVHs kept alive (LRU)               */
 #define MAT_MAX     128      /* max distinct OBJ+MTL material colours */
 
 #define PI 3.14159265358979323846
 
-#define RAMP    " .,:;~-=+*oO#%@"  /* dark -> bright, 15 levels       */
-#define RAMP_N  15
+#define RAMP_N  15            /* every ramp preset has exactly 15 distinct characters */
 
 /* ------------------------------------------------------------------- shapes */
 
@@ -120,6 +119,12 @@ static int    g_color_sel = 0;                     /* index into COLORS[]      *
 static int    g_light_color = 15;                  /* ANSI colour of the light */
 static int    g_light_sel = 0;                     /* index into COLORS[]      */
 static int    g_color_focus = 0;                   /* 0 = mesh, 1 = light      */
+/* ramp presets, dark -> bright (15 distinct ASCII characters each; index 0 = default) */
+static const char *const RAMPS[] = { " .,:;~-=+*oO#%@", " .'`,:;-~+=*#%@", " .-:=+*xX#%&$8@", " .'`^,:;Il!i><~" };
+static const char *const RAMP_NAMES[] = { "default", "soft", "bold", "airy" };
+#define RAMP_PRESETS 4
+static int    g_ramp_sel = 0;
+#define RAMP (RAMPS[g_ramp_sel])
 static unsigned char g_grad[RAMP_N];              /* ramp level -> palette idx */
 static signed char   g_ramp_rev[256];             /* ramp char  -> level       */
 static short *g_cc = NULL;                         /* per-cell colour override */
@@ -141,7 +146,10 @@ static int grow_buf(void **p, int *cap, size_t elem, int n) {
 static int cellfg_ensure(int n) { return grow_buf((void **)&g_cellfg, &g_cellfg_cap, sizeof(short), n); }
 static int lum_ensure(int n)    { return grow_buf((void **)&g_lum, &g_lum_cap, sizeof(double), n); }
 static int    g_help = 0, g_hud_on = 1, g_paused = 0;
-static int    g_hud_arg = 0;                       /* --hud given: it wins over the saved HUD mode */
+static int    g_panel_pct = 25;                    /* model-list width in % of the console (15..60, keys , and .) */
+static int    g_ramp_arg = 0;                      /* --ramp given: it wins over the saved preset */
+static int    g_interactive = 0;                   /* 1 only inside the interactive loop: enables ESC-cancel and load notices */
+static int    g_hud_arg = 0;                      /* --hud given: it wins over the saved HUD mode */
 static int    g_hud_mode = 0;                     /* 0 = full status line, 1 = compact (--hud) */
 static int    g_hq = 1;                            /* 1 = 2x2 edge supersampling, 0 = one sample per cell ([x]) */
 static int    g_tilt_arg = 0;                      /* --tilt given: it wins over the saved settings */
@@ -585,10 +593,22 @@ static void mesh_release(MeshDef *m) {
     m->built = 0;
 }
 
+/* Interactive runs only: put "Loading ..." on the top row before a blocking step.
+ * The next frame overwrites it. Never used for snapshots/exports (no escape codes in stdout). */
+static void loading_notice(const char *what) {
+    char buf[96];
+    DWORD w;
+    if (!g_interactive) return;
+    _snprintf(buf, sizeof(buf), "\x1b[H\x1b[39m Loading %.60s ...                ", what);
+    buf[sizeof(buf) - 1] = '\0';
+    WriteConsoleA(GetStdHandle(STD_OUTPUT_HANDLE), buf, (DWORD)strlen(buf), &w, NULL);
+}
+
 /* Build the BVH and the fit extents for a mesh. */
 static int mesh_build(MeshDef *m) {
     int i;
     if (!m || m->built || m->ntri <= 0) return 1;
+    if (m->ntri > 20000) loading_notice("mesh");
     m->bvh   = (BvhNode *)malloc(sizeof(BvhNode) * (size_t)(2 * m->ntri + 1));
     m->order = (int *)malloc(sizeof(int) * (size_t)m->ntri);
     m->cent  = (float *)malloc(sizeof(float) * (size_t)m->ntri * 3);
@@ -1478,7 +1498,7 @@ static void draw_help(char *grid, int cols, int rows) {
 
 /* Right-hand model list (Tab): about a quarter of the width, top to bottom. */
 static void draw_menu(char *grid, int cols, int rows) {
-    int pw = cols / 4;
+    int pw = cols * g_panel_pct / 100;
     int x0, listrows, i, r, c;
     int b0, nmatch, srank;
     if (pw < 12) pw = 12;
@@ -1534,10 +1554,10 @@ static void draw_menu(char *grid, int cols, int rows) {
         for (k = 0; k < avail && k < (int)sizeof(g_items[idx].name) - 1 && nm[k]; ++k) grid[(size_t)r * cols + (x0 + 3 + k)] = nm[k];
         if (nm[k]) grid[(size_t)r * cols + (x0 + 3 + avail - 1)] = '~';   /* name is cut off here */
     }
-    if (nmatch > listrows) {                  /* scrollbar in the last column: ^ track/thumb v */
+    if (nmatch > listrows && listrows >= 3 && cols - x0 >= 5) {   /* scrollbar in the last column: ^ track/thumb v */
         int track = listrows - 2, th, tpos, t;
-        grid[(size_t)1 * cols + (cols - 1)] = '^';
-        grid[(size_t)listrows * cols + (cols - 1)] = 'v';
+        grid[(size_t)1 * cols + (cols - 1)] = (g_menu_scroll > 0) ? '^' : ' ';                      /* arrows only where there is more */
+        grid[(size_t)listrows * cols + (cols - 1)] = (g_menu_scroll + listrows < nmatch) ? 'v' : ' ';
         if (track > 0) {
             th = track * listrows / nmatch; if (th < 1) th = 1;
             tpos = (nmatch > listrows) ? g_menu_scroll * (track - th) / (nmatch - listrows) : 0;
@@ -2047,6 +2067,7 @@ static MeshDef *model_load(int idx) {
     MeshDef *m;
     if (idx < 0 || idx >= g_model_count) return NULL;
     if (g_models[idx].mesh) return g_models[idx].mesh;
+    loading_notice(g_models[idx].stem);
     m = load_model_mesh(g_models[idx].path, err, sizeof(err));
     if (!m) {
         msg_setf("models: %ls: %s", g_models[idx].wname, err);
@@ -2193,6 +2214,7 @@ static void print_help(void) {
         "      --angle <deg>    Initial rotation angle in degrees (default: 0)\n"
         "      --tilt <deg>     Initial axis tilt in degrees, -90..90 (default: 0)\n"
         "      --hud <mode>     Status line: full | compact | off (default: full)\n"
+        "      --ramp <name>    Character ramp: default | soft | bold | airy\n"
         "      --up <axis>      Model up axis: z, y or x (default: z; key A cycles)\n"
         "      --shatter        With --snapshot: shatter and simulate the fall\n"
         "      --sim <sec>      With --shatter: seconds to simulate (default: 3)\n"
@@ -2234,6 +2256,8 @@ static void print_help(void) {
         "  ?  / F1              Show the key help box; any key closes it\n"
         "  h / SHIFT+H          Hide / show the status line; Shift+H switches it\n"
         "                       between full and compact\n"
+        "  T                    Cycle the character ramp (default, soft, bold, airy)\n"
+        "  , / .                In the list: narrower / wider list panel (15-60%%)\n"
         "  X                    Toggle 2x2 edge supersampling (quality / speed);\n"
         "                       GIF/PNG exports follow the current setting\n"
         "  [ / ]                Same as - / + (spin speed)\n"
@@ -2358,6 +2382,13 @@ static int parse_args(int argc, char **argv) {
             }
             g_start_tilt = atof(argv[++i]);
             g_tilt_arg = 1;
+        } else if (_stricmp(a, "--ramp") == 0) {
+            int k, found = -1;
+            if (i + 1 >= argc) { fprintf(stderr, "error: --ramp requires a name\n"); return 0; }
+            ++i;
+            for (k = 0; k < RAMP_PRESETS; ++k) if (_stricmp(argv[i], RAMP_NAMES[k]) == 0) found = k;
+            if (found < 0) { fprintf(stderr, "error: --ramp must be default, soft, bold or airy\n"); return 0; }
+            g_ramp_sel = found; g_ramp_arg = 1;
         } else if (_stricmp(a, "--hud") == 0) {
             if (i + 1 >= argc) { fprintf(stderr, "error: --hud requires full, compact or off\n"); return 0; }
             ++i;
@@ -2530,10 +2561,26 @@ static void canvas_draw(Canvas *cv, const char *grid, int cols, int rows) {
     GdiFlush();
 }
 
+/* ESC cancels an export started from the interactive loop (not --export). */
+static int export_cancelled(void) {
+    HANDLE hi = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD nev = 0, got = 0;
+    INPUT_RECORD rec;
+    int esc = 0;
+    if (!g_interactive) return 0;
+    /* drain the queue: keys typed during an export are discarded; ESC cancels */
+    while (GetNumberOfConsoleInputEvents(hi, &nev) && nev > 0) {
+        if (!ReadConsoleInputW(hi, &rec, 1, &got) || got == 0) break;
+        if (rec.EventType == KEY_EVENT && rec.Event.KeyEvent.bKeyDown &&
+            rec.Event.KeyEvent.wVirtualKeyCode == VK_ESCAPE) esc = 1;
+    }
+    return esc;
+}
+
 static void export_status(HANDLE h, int is_console, int i, int n) {
-    char buf[80];
+    char buf[96];
     if (!is_console) return;
-    _snprintf(buf, sizeof(buf), "\x1b[H\x1b[39mExporting frame %d/%d ...          ", i, n);
+    _snprintf(buf, sizeof(buf), "\x1b[H\x1b[39mExporting frame %d/%d ...%s          ", i, n, g_interactive ? "  [ESC] cancel" : "");
     buf[sizeof(buf) - 1] = '\0';
     write_all(h, is_console, buf, -1);
 }
@@ -2564,6 +2611,7 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
     double frame_dt = 1.0 / 30.0;
     double gif_cum = 0.0;
     size_t npix, fbytes, cbytes;
+    int cancelled = 0;
 
     if (cols <= 0 || rows <= 0) return 0;
 
@@ -2609,6 +2657,12 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
             }
         }
         if ((i & 7) == 7) export_status(h_out, is_console, i + 1, NF);
+        if (export_cancelled()) {
+            g_angle = save_angle; g_shattered = save_shat;
+            free(colframes); free(frames);
+            msg_setf("export cancelled");
+            return 0;
+        }
     }
     g_angle = save_angle;
     if (maxc < 0) { free(colframes); free(frames); msg_setf("export: nothing to draw"); return 0; }
@@ -2778,14 +2832,17 @@ static int export_animation(HANDLE h_out, int is_console, char *grid, int cols, 
             if (!gif_frame(gw, idx, dcs)) break;
         }
         if ((i & 3) == 3) export_status(h_out, is_console, i + 1, NF);
+        if (export_cancelled()) { cancelled = 1; break; }
     }
     g_angle = save_angle;
     g_shattered = save_shat;
 
     if (apng) rc = apng_end(aw); else rc = gif_end(gw);
+    if (cancelled) DeleteFileW(path);                 /* no partial file is left behind */
     {
         int W = outW, H = outH;
         free(colframes); free(idx); free(crop); free(frames); canvas_end(&cv);
+        if (cancelled) { msg_setf("export cancelled"); return 0; }
         if (rc) msg_setf("saved %ls (%dx%d, %d frames)", path, W, H, NF);
         else    msg_setf("export: write failed");
     }
@@ -2864,6 +2921,10 @@ static void settings_load(void) {
     if (v == 0 || v == 1) g_show_fps = v;
     v = ini_int(L"quality", -1);
     if (v == 0 || v == 1) g_hq = v;
+    v = ini_int(L"ramp", -1);
+    if (!g_ramp_arg && v >= 0 && v < RAMP_PRESETS) g_ramp_sel = v;
+    v = ini_int(L"panel", -1);
+    if (v >= 15 && v <= 60) g_panel_pct = v;
     v = ini_int(L"hud", -1);                   /* 0 = full, 1 = compact */
     if (!g_hud_arg && (v == 0 || v == 1)) g_hud_mode = v;
     GetPrivateProfileStringW(L"ascii3D", L"shape", L"", w, 64, g_ini_path);
@@ -2883,8 +2944,10 @@ static void settings_save(void) {
     _snwprintf(w, 64, L"%d", g_fg_color);            w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"mesh", w, g_ini_path);
     _snwprintf(w, 64, L"%d", g_light_color);         w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"light", w, g_ini_path);
     _snwprintf(w, 64, L"%d", g_show_fps ? 1 : 0);    w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"fps", w, g_ini_path);
+    if (!g_ramp_arg) { _snwprintf(w, 64, L"%d", g_ramp_sel); w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"ramp", w, g_ini_path); }   /* a one-off --ramp is not saved */
+    _snwprintf(w, 64, L"%d", g_panel_pct);           w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"panel", w, g_ini_path);
     _snwprintf(w, 64, L"%d", g_hq ? 1 : 0);          w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"quality", w, g_ini_path);
-    _snwprintf(w, 64, L"%d", g_hud_mode ? 1 : 0);    w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"hud", w, g_ini_path);
+    if (!g_hud_arg) { _snwprintf(w, 64, L"%d", g_hud_mode ? 1 : 0); w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"hud", w, g_ini_path); }   /* a one-off --hud is not saved */
     for (i = 0; g_shape_name_buf[i] && i < 63; ++i) {
         if ((unsigned char)g_shape_name_buf[i] < 32 || (unsigned char)g_shape_name_buf[i] > 126) { i = 0; break; }   /* non-ASCII: save no shape */
         w[i] = (wchar_t)g_shape_name_buf[i];
@@ -3082,6 +3145,7 @@ int main(int argc, char **argv) {
 
     angle_deg = g_start_angle;
     g_tilt = g_start_tilt;
+    g_interactive = 1;
     rng_seed((unsigned int)GetTickCount());
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&last);
@@ -3121,6 +3185,11 @@ int main(int argc, char **argv) {
                             else if (vk == VK_F1 || ch == '?') g_help = 1;
                             else if (ch == 'h') g_hud_on = !g_hud_on;
                             else if (ch == 'H') { g_hud_mode = !g_hud_mode; g_hud_on = 1; }   /* Shift+H: full <-> compact */
+                            else if (!g_webcam && (ch == 't' || ch == 'T')) {
+                                g_ramp_sel = (g_ramp_sel + 1) % RAMP_PRESETS;
+                                ramp_rev_init();
+                                msg_setf("ramp: %s", RAMP_NAMES[g_ramp_sel]);
+                            }
                             else if (ch == 'x' || ch == 'X') {
                                 g_hq = !g_hq;
                                 msg_setf(g_hq ? "quality: 2x2 edge supersampling" : "quality: one sample per cell");
@@ -3139,6 +3208,12 @@ int main(int argc, char **argv) {
                                 }
                                 else if (vk == VK_ESCAPE) g_running = 0;
                                 else if (ch == '/') g_filter_edit = 1;
+                                else if (ch == ',' || ch == '.') {      /* narrower / wider list panel */
+                                    g_panel_pct += (ch == '.') ? 5 : -5;
+                                    if (g_panel_pct < 15) g_panel_pct = 15;
+                                    if (g_panel_pct > 60) g_panel_pct = 60;
+                                    msg_setf("panel width: %d%%", g_panel_pct);
+                                }
                                 else if (vk == VK_UP)   g_menu_sel = menu_step(g_menu_sel, -1);
                                 else if (vk == VK_DOWN) g_menu_sel = menu_step(g_menu_sel, 1);
                                 else if (vk == VK_RETURN || vk == VK_SPACE) { if (item_matches(g_menu_sel)) select_index(g_menu_sel); }

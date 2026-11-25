@@ -45,11 +45,18 @@ $long = Join-Path $md 'a_really_long_model_name_that_cannot_fit_the_panel.stl'
 try {
     $many + $long | ForEach-Object { Copy-Item (Join-Path $md 'tet_stl.stl') $_ }
     $m = (& $exe --snapshot -s cube --menu 2>$null)
-    $last = ($m | ForEach-Object { $_.Substring($_.Length - 1) }) -join ''
-    Check 'list scrollbar (^ # v in the last column)' ($last -match '\^' -and $last -match '#' -and $last -match 'v')
+    $last = ($m[1..25] | ForEach-Object { $_.Substring($_.Length - 1) }) -join ''   # list rows only (the slider area below has other text)
+    Check 'list scrollbar (thumb and v at the top of the list, no ^)' ($last -match '#' -and $last -match 'v' -and $last -notmatch '\^')
+    $m3 = (& $exe --snapshot -s tet_stl --menu 2>$null)
+    $last3 = ($m3[1..25] | ForEach-Object { $_.Substring($_.Length - 1) }) -join ''
+    Check 'list scrollbar at the end (^ and thumb, no v)' ($last3 -match '\^' -and $last3 -match '#' -and $last3 -notmatch 'v')
     $m2 = (& $exe --snapshot -s a_really_long_model_name_that_cannot_fit_the_panel --menu 2>$null) -join "`n"
     Check 'cut-off names get a ~ marker' ($m2 -match 'a_really\S*~')
 } finally { $many + $long | ForEach-Object { Remove-Item $_ -ErrorAction SilentlyContinue } }
+$def = (& $exe --snapshot -s sphere 2>$null) -join "`n"
+$bold = (& $exe --snapshot -s sphere --ramp bold 2>$null) -join "`n"
+Check 'ramp presets change the glyphs' ($bold -ne $def -and $bold -match '[xX$&8]' -and $def -notmatch '[xX$&8]')
+& $exe --snapshot -s sphere --ramp nope 2>&1 | Out-Null; Check 'unknown ramp fails' ($LASTEXITCODE -ne 0)
 & $exe --version | Out-Null; Check 'version' ($LASTEXITCODE -eq 0)
 & $exe --help    | Out-Null; Check 'help'    ($LASTEXITCODE -eq 0)
 & $exe --snapshot -s doesnotexist 2>&1 | Out-Null; Check 'unknown shape fails' ($LASTEXITCODE -ne 0)
