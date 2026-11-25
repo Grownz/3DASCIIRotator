@@ -1,5 +1,5 @@
 ﻿/* ============================================================================
- * 3D ASCII Rotator - version 3.3.0
+ * 3D ASCII Rotator - version 3.4.0
  *
  * A tiny native Windows x64 console application that renders a shaded
  * three-dimensional solid as animated ASCII art.
@@ -44,7 +44,7 @@
 /* ------------------------------------------------------------------ config */
 
 #define APP_NAME    "3D ASCII Rotator"
-#define APP_VERSION "3.3.0"
+#define APP_VERSION "3.4.0"
 
 #define DEFAULT_SPEED 15.0   /* degrees per second                  */
 #define MIN_SPEED      5.0   /* degrees per second                  */

@@ -4,6 +4,17 @@ All notable changes to **3D ASCII Rotator** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.4.0] - 2026-11-25
+
+### Added
+- A model file can be given on the command line (`ascii3D model.stl`) or dropped on
+  `ascii3D.exe` in Explorer: it is added to the list and selected, in place
+  (nothing is copied). Non-ASCII and spaced paths work. A one-off file does not
+  replace the shape saved in `ascii3D.ini`. Dropping a file onto the console
+  window is not supported: the terminal pastes the path as text.
+- Typing a bare word that is not an option now reports "model file not found"
+  instead of "unknown argument".
+
 ## [3.3.0] - 2026-11-25
 
 ### Added
@@ -29,10 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `Loading ...` notice shows while a big model is parsed or its BVH is built.
 - `t` / `--ramp` switch between four 15-character ramps (default, soft, bold,
   airy); `,` / `.` resize the model list panel; both are saved.
-- A model file can be given on the command line (`ascii3D model.stl`) or dropped on
-  `ascii3D.exe` in Explorer: it is added to the list and shown first, in place
-  (nothing is copied). Non-ASCII and spaced paths work. Dropping a file onto the
-  console window is not supported: the terminal pastes the path as text.
 - Mouse drag with the left button spins (sideways) and tilts (up/down) the model.
 - The model folder limit is 200 files (was 32, which the shipped meshes had started
   to eat into since 3.2.0).
