@@ -197,6 +197,16 @@ build\ascii3D.exe --snapshot -s f1 --shatter --sim 2 > settled.txt
 | `K` / `Pause` | Pause / resume the spin (and the shatter fall). |
 | `q` | Quit (convenience alias for `ESC`). |
 
+## Saved settings
+
+Interactive runs remember the last shape, spin speed, tilt, mesh and light
+colours and the FPS readout in `ascii3D.ini` next to the executable (written
+when you quit, read at start-up). Command-line options such as `-s`, `--tilt`,
+`--mesh` and `--light` override the saved values for that run. Delete the file
+to reset. `--snapshot`, `--export`, `--bench` and `--webcam` neither read nor
+write it. If the folder is read-only the file is simply not written. A saved
+shape that no longer exists is ignored.
+
 ## Bring your own models
 
 Drop 3D files into a **`models/`** folder next to `ascii3D.exe` (created on

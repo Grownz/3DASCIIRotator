@@ -16,7 +16,7 @@ are not lost. Effort/impact are rough.
 | Loading indicator for large models | feedback | M | medium |
 | (done) Pause key (`K` / `Pause`) | input | S | medium |
 | (done) Reverse shape cycle (`Shift+Space`); direct shape jump (`1`-`9`) | input | S | medium |
-| Remember settings between runs (shape, speed, tilt, colours, FPS) | settings | M | medium |
+| (done) Remember settings between runs (shape, speed, tilt, colours, FPS) | settings | M | medium |
 | Mouse drag to rotate / tilt | input | L | medium |
 | Ramp / theme presets | rendering | M | medium |
 | Quality toggle (supersampling) in the UI | rendering | S | medium |

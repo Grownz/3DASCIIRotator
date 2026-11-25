@@ -141,7 +141,8 @@ static int grow_buf(void **p, int *cap, size_t elem, int n) {
 static int cellfg_ensure(int n) { return grow_buf((void **)&g_cellfg, &g_cellfg_cap, sizeof(short), n); }
 static int lum_ensure(int n)    { return grow_buf((void **)&g_lum, &g_lum_cap, sizeof(double), n); }
 static int    g_help = 0, g_hud_on = 1, g_paused = 0;
-static char   g_filter[32] = "";                   /* model-list filter (substring, case-insensitive) */
+static int    g_tilt_arg = 0;                      /* --tilt given: it wins over the saved settings */
+static char   g_filter[32] = "";                 /* model-list filter (substring, case-insensitive) */
 static int    g_filter_len = 0, g_filter_edit = 0; /* edit mode: every key goes to the filter */
 static int    g_help_x0 = 0, g_help_y0 = 0, g_help_w = 0, g_help_h = 0;   /* help box (0 = not drawn) */
 static int    g_hud_len = 0, g_msg_len = 0, g_fps_len = 0, g_menu_x0 = -1, g_rows = 0;
@@ -2222,6 +2223,9 @@ static void print_help(void) {
         "                       transparent background, no HUD)\n"
         "  R                    Rescan the models/ folder\n"
         "  q                    Quit\n\n"
+        "Interactive runs remember the shape, speed, tilt, colours and FPS\n"
+        "readout in ascii3D.ini next to the executable; command-line options win.\n"
+        "Delete the file to reset. Snapshots, exports and --bench ignore it.\n\n"
         "Drop .stl/.obj/.ply/.off/.gltf/.glb/.3mf/.fbx files into the 'models'\n"
         "folder next to this executable; they are detected automatically and\n"
         "added to the cycle. OBJ files may use an .mtl for per-material colours.\n",
@@ -2333,6 +2337,7 @@ static int parse_args(int argc, char **argv) {
                 return 0;
             }
             g_start_tilt = atof(argv[++i]);
+            g_tilt_arg = 1;
         } else if (_stricmp(a, "--up") == 0) {
             const char *v;
             if (i + 1 >= argc) { fprintf(stderr, "error: --up requires z, y or x\n"); return 0; }
@@ -2791,6 +2796,69 @@ static int run_bench(int frames) {
     return 0;
 }
 
+/* ---- saved settings: ascii3D.ini next to the exe (interactive runs only) -- */
+static wchar_t g_ini_path[MAX_PATH] = L"";
+static char    g_saved_shape[64] = "";
+
+static void settings_init(void) {
+    wchar_t *p;
+    DWORD n = GetModuleFileNameW(NULL, g_ini_path, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH - 16) { g_ini_path[0] = L'\0'; return; }   /* no path: no settings */
+    p = wcsrchr(g_ini_path, L'\\');
+    if (!p) { g_ini_path[0] = L'\0'; return; }
+    wcscpy(p + 1, L"ascii3D.ini");           /* always a full path: a bare name would land in the Windows folder */
+}
+
+/* Not GetPrivateProfileInt: it returns 0 for negative values (tilt can be < 0). */
+static int ini_int(const wchar_t *key, int def) {
+    wchar_t b[16];
+    GetPrivateProfileStringW(L"ascii3D", key, L"", b, 16, g_ini_path);
+    return b[0] ? _wtoi(b) : def;
+}
+
+/* Reads speed, tilt, colours, fps and the shape name. The file is untrusted
+ * input: every value is clamped or validated. Command-line options win. */
+static void settings_load(void) {
+    wchar_t w[64];
+    int v, i;
+    if (!g_ini_path[0]) return;
+    v = ini_int(L"speed", -1);
+    if (v >= (int)MIN_SPEED && v <= (int)MAX_SPEED) g_speed = (double)v;
+    if (!g_tilt_arg) {
+        v = ini_int(L"tilt", 9999);
+        if (v >= -(int)MAX_TILT && v <= (int)MAX_TILT) g_start_tilt = (double)v;
+    }
+    v = ini_int(L"mesh", -1);
+    if (v >= 0 && v < 256 && COLORS[colors_index(v)] == v) { g_fg_color = v; g_color_sel = colors_index(v); }
+    v = ini_int(L"light", -1);
+    if (v >= 0 && v < 256 && COLORS[colors_index(v)] == v) { g_light_color = v; g_light_sel = colors_index(v); }
+    v = ini_int(L"fps", -1);
+    if (v == 0 || v == 1) g_show_fps = v;
+    GetPrivateProfileStringW(L"ascii3D", L"shape", L"", w, 64, g_ini_path);
+    for (i = 0; w[i] && i < (int)sizeof(g_saved_shape) - 1; ++i) {
+        if (w[i] < 32 || w[i] > 126) { g_saved_shape[0] = '\0'; return; }   /* ASCII names only */
+        g_saved_shape[i] = (char)w[i];
+    }
+    g_saved_shape[i] = '\0';
+}
+
+static void settings_save(void) {
+    wchar_t w[64];
+    int i;
+    if (!g_ini_path[0]) return;
+    _snwprintf(w, 64, L"%d", (int)(g_speed + 0.5));  w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"speed", w, g_ini_path);
+    _snwprintf(w, 64, L"%d", (int)g_tilt);           w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"tilt", w, g_ini_path);
+    _snwprintf(w, 64, L"%d", g_fg_color);            w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"mesh", w, g_ini_path);
+    _snwprintf(w, 64, L"%d", g_light_color);         w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"light", w, g_ini_path);
+    _snwprintf(w, 64, L"%d", g_show_fps ? 1 : 0);    w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"fps", w, g_ini_path);
+    for (i = 0; g_shape_name_buf[i] && i < 63; ++i) {
+        if ((unsigned char)g_shape_name_buf[i] < 32 || (unsigned char)g_shape_name_buf[i] > 126) return;   /* skip non-ASCII names */
+        w[i] = (wchar_t)g_shape_name_buf[i];
+    }
+    w[i] = 0;
+    WritePrivateProfileStringW(L"ascii3D", L"shape", w, g_ini_path);   /* a read-only folder just fails silently */
+}
+
 int main(int argc, char **argv) {
     HANDLE h_out, h_in;
     DWORD  orig_mode = 0, in_mode = 0;
@@ -2799,8 +2867,13 @@ int main(int argc, char **argv) {
     LARGE_INTEGER freq, now, last, frame_start;
     double angle_deg;
     double scan_acc = 0.0;
+    int    use_ini;
 
     if (!parse_args(argc, argv)) return 1;
+    /* saved settings only apply to real interactive runs, never to snapshots,
+     * exports, benchmarks or the webcam (so test output stays reproducible) */
+    use_ini = !g_snapshot && !g_export_fmt && g_bench <= 0 && !g_list_cams && !g_webcam;
+    if (!g_snapshot) { g_filter_len = 0; g_filter[0] = '\0'; }   /* --filter is a snapshot preview option */
 
     if (g_up_arg >= 0) { g_up_axis = g_up_arg; model_rot_update(); }
 
@@ -2817,6 +2890,7 @@ int main(int argc, char **argv) {
     }
 
     colors_init();
+    if (use_ini) { settings_init(); settings_load(); }   /* defaults < ascii3D.ini < command line */
     if (g_webcam && g_export_fmt) {
         fprintf(stderr, "error: --export is not available with --webcam\n");
         return 1;
@@ -2847,8 +2921,8 @@ int main(int argc, char **argv) {
             fprintf(stderr, "\n");
             return 1;
         }
-    } else {
-        select_index(0);
+    } else if (!(use_ini && g_saved_shape[0] && select_by_name(g_saved_shape))) {
+        select_index(0);                 /* no saved shape, or it no longer exists */
     }
 
     if (g_bench > 0) return run_bench(g_bench);
@@ -3045,6 +3119,7 @@ int main(int argc, char **argv) {
                                 else if (vk == VK_DELETE) {   /* reset the focused slider to the factory colour */
                                     if (g_color_focus) { g_light_color = 15; g_light_sel = colors_index(g_light_color); }
                                     else               { g_fg_color = 7;     g_color_sel = colors_index(g_fg_color); }
+                                    grad_build();             /* same as color_step(): refresh the shading ramp */
                                 }
                                 else if (vk == VK_LEFT)  { if (g_color_focus) color_step(&g_light_sel, &g_light_color, -1); else color_step(&g_color_sel, &g_fg_color, -1); }
                                 else if (vk == VK_RIGHT) { if (g_color_focus) color_step(&g_light_sel, &g_light_color,  1); else color_step(&g_color_sel, &g_fg_color,  1); }
@@ -3211,6 +3286,7 @@ int main(int argc, char **argv) {
     }
 
     /* ---- restore the console ----------------------------------------- */
+    if (use_ini) settings_save();
     if (g_webcam) { webcam_stop(); webcam_global_shutdown(); }
     if (g_wait_timer) CloseHandle(g_wait_timer);
     timeEndPeriod(1);

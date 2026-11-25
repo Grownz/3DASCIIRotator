@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   that list position.
 - The colour sliders show the colour as `#RRGGBB`; `Del` resets the selected
   slider to its factory colour (mesh 7, light 15).
+- Interactive runs remember shape, speed, tilt, colours and the FPS readout in
+  `ascii3D.ini` next to the exe (command-line options win; snapshots, exports,
+  `--bench` and `--webcam` ignore it).
+- `--filter` is ignored outside `--snapshot`.
 
 ## [3.2.0] - 2026-11-25
 

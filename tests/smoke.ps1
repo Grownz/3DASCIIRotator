@@ -31,6 +31,13 @@ $m = (& $exe --snapshot -s cube --menu 2>$null) -join "`n"; Check 'menu marks lo
 $f = (& $exe --snapshot -s cube --menu --filter ste 2>$null) -join "`n"
 Check 'filter shows stego, hides cube' ($f -match '\|>.stego' -and $f -notmatch '\|[> ]\*?cube')
 Check 'slider hex labels' ($f -match 'mesh #[0-9A-F]{6}' -and $f -match 'light #[0-9A-F]{6}')
+$ini = Join-Path $root 'build\ascii3D.ini'   # saved settings must never affect snapshots
+$base = (& $exe --snapshot -s cube 2>$null) -join "`n"
+try {
+    Set-Content $ini "[ascii3D]`nshape=maus`ntilt=60`nspeed=90`nmesh=196`nlight=46`nfps=1`n"
+    $with = (& $exe --snapshot -s cube 2>$null) -join "`n"
+} finally { Remove-Item $ini -ErrorAction SilentlyContinue }
+Check 'snapshot ignores ascii3D.ini' ($with -eq $base -and $base.Length -gt 0)
 & $exe --version | Out-Null; Check 'version' ($LASTEXITCODE -eq 0)
 & $exe --help    | Out-Null; Check 'help'    ($LASTEXITCODE -eq 0)
 & $exe --snapshot -s doesnotexist 2>&1 | Out-Null; Check 'unknown shape fails' ($LASTEXITCODE -ne 0)
