@@ -57,6 +57,17 @@ $def = (& $exe --snapshot -s sphere 2>$null) -join "`n"
 $bold = (& $exe --snapshot -s sphere --ramp bold 2>$null) -join "`n"
 Check 'ramp presets change the glyphs' ($bold -ne $def -and $bold -match '[xX$&8]' -and $def -notmatch '[xX$&8]')
 & $exe --snapshot -s sphere --ramp nope 2>&1 | Out-Null; Check 'unknown ramp fails' ($LASTEXITCODE -ne 0)
+# a model file on the command line (also what dropping a file on the exe does): space and non-ASCII in the path
+$dd = Join-Path $env:TEMP ("a3d drop $PID")
+New-Item -ItemType Directory $dd | Out-Null
+try {
+    $mf = Join-Path $dd ("W{0}rfel.stl" -f [char]0xFC)
+    Copy-Item (Join-Path $md 'tet_stl.stl') $mf
+    Set-Content (Join-Path $dd 'notes.txt') 'x'
+    $r = Snap @('--snapshot', $mf);                  Check 'model file argument loads' ($r.Code -eq 0 -and $r.Ink -gt 50)
+    $r = Snap @('--snapshot', (Join-Path $dd 'missing.stl'));  Check 'missing model file fails' ($r.Code -ne 0)
+    $r = Snap @('--snapshot', (Join-Path $dd 'notes.txt'));    Check 'unsupported model file fails' ($r.Code -ne 0)
+} finally { Remove-Item $dd -Recurse -Force -ErrorAction SilentlyContinue }
 & $exe --version | Out-Null; Check 'version' ($LASTEXITCODE -eq 0)
 & $exe --help    | Out-Null; Check 'help'    ($LASTEXITCODE -eq 0)
 & $exe --snapshot -s doesnotexist 2>&1 | Out-Null; Check 'unknown shape fails' ($LASTEXITCODE -ne 0)

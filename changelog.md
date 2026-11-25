@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `Loading ...` notice shows while a big model is parsed or its BVH is built.
 - `t` / `--ramp` switch between four 15-character ramps (default, soft, bold,
   airy); `,` / `.` resize the model list panel; both are saved.
+- A model file can be given on the command line (`ascii3D model.stl`) or dropped on
+  `ascii3D.exe` in Explorer: it is added to the list and shown first, in place
+  (nothing is copied). Non-ASCII and spaced paths work. Dropping a file onto the
+  console window is not supported: the terminal pastes the path as text.
 - Mouse drag with the left button spins (sideways) and tilts (up/down) the model.
 - The model folder limit is 200 files (was 32, which the shipped meshes had started
   to eat into since 3.2.0).

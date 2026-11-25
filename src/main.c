@@ -148,6 +148,7 @@ static int    g_help = 0, g_hud_on = 1, g_paused = 0;
 static int    g_panel_pct = 25;                    /* model-list width in % of the console (15..60, keys , and .) */
 static int    g_ramp_arg = 0;                      /* --ramp given: it wins over the saved preset */
 static int    g_drag_on = 0, g_drag_x = 0, g_drag_y = 0;   /* left-button drag: last cell */
+static int    g_file_arg = -1;                     /* argv index of a model file given on the command line (or dropped on the exe) */
 static int    g_interactive = 0;                   /* 1 only inside the interactive loop: enables ESC-cancel and load notices */
 static int    g_hud_arg = 0;                      /* --hud given: it wins over the saved HUD mode */
 static int    g_hud_mode = 0;                     /* 0 = full status line, 1 = compact (--hud) */
@@ -1921,6 +1922,7 @@ typedef struct {
 } ModelFile;
 
 static ModelFile g_models[MAX_MODELS];
+static wchar_t   g_extra_model[MAX_PATH] = L"";   /* full path of the model file named on the command line */
 static int       g_model_count = 0;
 
 static MeshDef *model_load(int idx) {
@@ -1972,6 +1974,12 @@ static void models_init(void) {
     CreateDirectoryW(g_models_dir, NULL);
 }
 
+static int model_ext_ok(const wchar_t *ext) {
+    return ext && (!_wcsicmp(ext, L".stl") || !_wcsicmp(ext, L".obj") || !_wcsicmp(ext, L".ply") ||
+                   !_wcsicmp(ext, L".off") || !_wcsicmp(ext, L".gltf") || !_wcsicmp(ext, L".glb") ||
+                   !_wcsicmp(ext, L".3mf") || !_wcsicmp(ext, L".fbx"));
+}
+
 static void models_poll(int force) {
     static DirEnt ents[256];
     int ne = 0, i;
@@ -1990,9 +1998,7 @@ static void models_poll(int force) {
             if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
             ext = wcsrchr(fd.cFileName, L'.');
             if (!ext) continue;
-            if (_wcsicmp(ext, L".stl") && _wcsicmp(ext, L".obj") && _wcsicmp(ext, L".ply") &&
-                _wcsicmp(ext, L".off") && _wcsicmp(ext, L".gltf") && _wcsicmp(ext, L".glb") &&
-                _wcsicmp(ext, L".3mf") && _wcsicmp(ext, L".fbx")) continue;
+            if (!model_ext_ok(ext)) continue;
             if (ne < (int)(sizeof(ents) / sizeof(ents[0]))) {
                 DirEnt *d = &ents[ne++];
                 _snwprintf(d->path, MAX_PATH - 1, L"%ls\\%ls", g_models_dir, fd.cFileName);
@@ -2004,6 +2010,21 @@ static void models_poll(int force) {
             }
         } while (FindNextFileW(h, &fd));
         FindClose(h);
+    }
+    if (g_extra_model[0] && ne < (int)(sizeof(ents) / sizeof(ents[0]))) {   /* file named on the command line */
+        WIN32_FILE_ATTRIBUTE_DATA fa;
+        int dup = 0;
+        for (i = 0; i < ne; ++i) if (_wcsicmp(ents[i].path, g_extra_model) == 0) dup = 1;   /* already in models/ */
+        if (!dup && GetFileAttributesExW(g_extra_model, GetFileExInfoStandard, &fa) &&
+            !(fa.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            DirEnt *d = &ents[ne++];
+            const wchar_t *base = wcsrchr(g_extra_model, L'\\');
+            base = base ? base + 1 : g_extra_model;
+            wcsncpy(d->path, g_extra_model, MAX_PATH - 1); d->path[MAX_PATH - 1] = L'\0';
+            wcsncpy(d->wname, base, MAX_PATH - 1); d->wname[MAX_PATH - 1] = L'\0';
+            d->mtime = ((unsigned long long)fa.ftLastWriteTime.dwHighDateTime << 32) | fa.ftLastWriteTime.dwLowDateTime;
+            d->size  = ((unsigned long long)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
+        }
     }
     qsort(ents, (size_t)ne, sizeof(DirEnt), dir_cmp);
 
@@ -2063,7 +2084,10 @@ static void print_help(void) {
         "%s %s\n\n"
         "Render a shaded 3D shape as animated ASCII art in the console.\n\n"
         "Usage:\n"
-        "  ascii3D [options]\n\n"
+        "  ascii3D [options] [model-file]\n\n"
+        "A model file (.stl .obj .ply .off .gltf .glb .3mf .fbx) given as an argument\n"
+        "is added to the list and shown first; dropping a file on ascii3D.exe in\n"
+        "Explorer does the same. The file stays where it is (nothing is copied).\n\n"
         "Options:\n"
         "  -s, --shape <name>   Shape to render: cube | cylinder | diamond |\n"
         "                       sphere, or a model name from the models/ folder\n"
@@ -2276,6 +2300,12 @@ static int parse_args(int argc, char **argv) {
                 return 0;
             }
             g_sim = atof(argv[++i]);
+        } else if (a[0] != '-' && a[0] != '/') {      /* a model file: ascii3D model.stl (or dropped on the exe) */
+            if (g_file_arg >= 0) {
+                fprintf(stderr, "error: only one model file can be given ('%s')\n", a);
+                return 0;
+            }
+            g_file_arg = i;
         } else {
             fprintf(stderr, "error: unknown argument '%s' (try --help)\n", a);
             return 0;
@@ -2907,6 +2937,60 @@ static int run_snapshot(HANDLE h_out, int is_console) {
     return 0;
 }
 
+/* The index-th command-line token as UTF-16 (argv is ANSI and would mangle non-ANSI file names).
+ * Same quoting rules as the C runtime for ordinary paths. */
+static int wide_arg(int index, wchar_t *out, int cap) {
+    const wchar_t *q = GetCommandLineW();
+    int tok = 0;
+    while (q && *q) {
+        int n = 0, inq = 0;
+        while (*q == L' ' || *q == L'\t') ++q;
+        if (!*q) break;
+        while (*q && (inq || (*q != L' ' && *q != L'\t'))) {
+            if (*q == L'"') { inq = !inq; ++q; continue; }
+            if (tok == index && n < cap - 1) out[n++] = *q;
+            ++q;
+        }
+        if (tok == index) { out[n] = L'\0'; return n > 0; }
+        ++tok;
+    }
+    return 0;
+}
+
+/* Turn the model file argument into g_extra_model (full path). Returns 0 and prints a message on failure. */
+static int resolve_file_arg(const char *shown) {
+    wchar_t raw[MAX_PATH];
+    DWORD n;
+    DWORD attr;
+    if (!wide_arg(g_file_arg, raw, MAX_PATH)) { fprintf(stderr, "error: cannot read the file argument '%s'\n", shown); return 0; }
+    n = GetFullPathNameW(raw, MAX_PATH, g_extra_model, NULL);
+    if (n == 0 || n >= MAX_PATH) { g_extra_model[0] = L'\0'; fprintf(stderr, "error: path too long: '%s'\n", shown); return 0; }
+    attr = GetFileAttributesW(g_extra_model);
+    if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY)) {
+        g_extra_model[0] = L'\0';
+        fprintf(stderr, "error: model file not found: '%s'\n", shown);
+        return 0;
+    }
+    if (!model_ext_ok(wcsrchr(g_extra_model, L'.'))) {
+        g_extra_model[0] = L'\0';
+        fprintf(stderr, "error: unsupported model file '%s' (stl, obj, ply, off, gltf, glb, 3mf, fbx)\n", shown);
+        return 0;
+    }
+    return 1;
+}
+
+/* Select the command-line model in the list; returns 1 when it was found. */
+static int select_extra_model(void) {
+    int m, it;
+    if (!g_extra_model[0]) return 0;
+    for (m = 0; m < g_model_count; ++m) {
+        if (_wcsicmp(g_models[m].path, g_extra_model) != 0) continue;
+        for (it = 0; it < g_item_count; ++it)
+            if (g_items[it].model == m) { select_index(it); return 1; }
+    }
+    return 0;
+}
+
 /* Read and handle every pending console event: keys, mouse wheel and drag.
  * angle_deg is the live spin angle (a drag changes it). */
 static void process_input(HANDLE h_in, HANDLE h_out, int is_console, char *grid,
@@ -3122,6 +3206,7 @@ int main(int argc, char **argv) {
     if (!parse_args(argc, argv)) return 1;
     /* saved settings only apply to real interactive runs, never to snapshots,
      * exports, benchmarks or the webcam (so test output stays reproducible) */
+    if (g_file_arg >= 0 && !resolve_file_arg(argv[g_file_arg])) return 1;
     use_ini = !g_snapshot && !g_export_fmt && g_bench <= 0 && !g_list_cams && !g_webcam;
     if (!g_snapshot) { g_filter_len = 0; g_filter[0] = '\0'; }   /* --filter is a snapshot preview option */
 
@@ -3171,6 +3256,8 @@ int main(int argc, char **argv) {
             fprintf(stderr, "\n");
             return 1;
         }
+    } else if (select_extra_model()) {
+        /* the model file from the command line is shown first */
     } else if (!(use_ini && g_saved_shape[0] && select_by_name(g_saved_shape))) {
         select_index(0);                 /* no saved shape, or it no longer exists */
     }

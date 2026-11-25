@@ -120,7 +120,20 @@ environment and produces `build\ascii3D.exe`.
 
 ```bat
 build\ascii3D.exe -s cube
+build\ascii3D.exe C:\models\dragon.stl
 ```
+
+### Opening a model file
+
+Give a model file (`.stl`, `.obj`, `.ply`, `.off`, `.gltf`, `.glb`, `.3mf`,
+`.fbx`) as the argument, or **drag it onto `ascii3D.exe` in Explorer**: it is
+added to the model list and shown first. The file stays where it is (nothing
+is copied into `models/`), so its `.mtl`, `.bin` and `.json` neighbours are found
+as usual. The entry is gone after you quit; put the file in `models/` to keep it.
+
+Dragging a file **into an open console or Windows Terminal window** is not
+supported: the terminal just pastes the path as text, and a console program
+gets no drop event.
 
 ### Options
 
