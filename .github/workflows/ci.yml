@@ -1,0 +1,13 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  build-and-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        shell: cmd
+        run: build.bat
+      - name: Smoke tests
+        shell: pwsh
+        run: tests/smoke.ps1
