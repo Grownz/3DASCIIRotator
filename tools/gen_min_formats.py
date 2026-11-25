@@ -109,3 +109,61 @@ with zipfile.ZipFile(os.path.join(OUT, "min_mat.3mf"), "w", zipfile.ZIP_DEFLATED
     z.writestr("_rels/.rels", rels)
     z.writestr("3D/3dmodel.model", xml)
 print("wrote min_mat.3mf")
+
+
+# --- binary FBX (v7400): one Model + Geometry + connection --------------------
+# Vertices is a raw double array, PolygonVertexIndex a zlib-compressed int array,
+# so both array encodings of the reader (and inflate.c) are exercised.
+import zlib
+
+
+def _prop_L(v): return b"L" + struct.pack("<q", v)
+def _prop_S(s): s = s.encode(); return b"S" + struct.pack("<I", len(s)) + s
+
+
+def _prop_arr(t, vals, compress):
+    fmt = {"d": "<%dd", "i": "<%di"}[t] % len(vals)
+    raw = struct.pack(fmt, *vals)
+    if compress:
+        z = zlib.compress(raw)
+        return t.encode() + struct.pack("<III", len(vals), 1, len(z)) + z
+    return t.encode() + struct.pack("<III", len(vals), 0, len(raw)) + raw
+
+
+def _node(name, props=(), kids=(), base=0):
+    """Encode one record at absolute file offset `base`; returns bytes."""
+    nm = name.encode()
+    pb = b"".join(props)
+    kid_base = base + 13 + len(nm) + len(pb)
+    kb = b""
+    for k in kids:
+        enc = k(kid_base + len(kb))
+        kb += enc
+    if kids:
+        kb += b"\0" * 13
+    end = base + 13 + len(nm) + len(pb) + len(kb)
+    return struct.pack("<III", end, len(props), len(pb)) + bytes([len(nm)]) + nm + pb + kb
+
+
+def _mk(name, props=(), kids=()):
+    return lambda base: _node(name, props, kids, base)
+
+
+fv = [c for v in verts for c in v]                              # 8 cube corners, xyz
+pvi = []
+for i in range(0, len(tris), 3):                                # last index of each polygon is ~idx
+    pvi += [tris[i], tris[i + 1], -tris[i + 2] - 1]
+geo = _mk("Geometry", [_prop_L(1), _prop_S("Cube\x00\x01Geometry"), _prop_S("Mesh")], [
+    _mk("Vertices", [_prop_arr("d", fv, False)]),
+    _mk("PolygonVertexIndex", [_prop_arr("i", pvi, True)])])
+mdl = _mk("Model", [_prop_L(2), _prop_S("Cube\x00\x01Model"), _prop_S("Mesh")])
+objs = _mk("Objects", [], [geo, mdl])
+conn = _mk("Connections", [], [_mk("C", [_prop_S("OO"), _prop_L(1), _prop_L(2)])])
+body = b""
+head = b"Kaydara FBX Binary  \x00\x1a\x00" + struct.pack("<I", 7400)
+for top in (objs, conn):
+    body += top(len(head) + len(body))
+body += b"\0" * 13
+with open(os.path.join(OUT, "min_cube.fbx"), "wb") as f:
+    f.write(head + body)
+print("wrote min_cube.fbx")

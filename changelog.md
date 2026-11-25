@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `fuzz` workflow that fuzzes each format for 30 s per push. `loader_load` is
   split into `loader_load` (file) and `loader_load_buf` (memory) for it.
 - `tests/interactive.ps1` drives the real program with injected keys (local).
+- A generated binary FBX fixture (one array raw, one zlib-compressed) joins the
+  smoke tests and the FBX fuzz seeds; the workflows use `actions/checkout@v7`
+  and `actions/upload-artifact@v7`.
 
 ## [3.2.0] - 2026-11-25
 

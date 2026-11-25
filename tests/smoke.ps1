@@ -24,7 +24,7 @@ Set-Content "$md\tet_off.off" ((@('OFF','4 4 0') + ($TetV | % { $_ -join ' ' }) 
 
 $shapes = 'cube','cylinder','diamond','sphere','stego','f1','companion','maus','fish','kebab','berlin','china'
 foreach ($s in $shapes) { $r = Snap @('--snapshot','-s',$s); Check "shape $s" ($r.Code -eq 0 -and $r.Ink -gt 50) }
-foreach ($m in 'min_b64','min_ext','min_glb','min_mat','tet_stl','tet_obj','tet_ply','tet_off') { $r = Snap @('--snapshot','-s',$m); Check "model $m" ($r.Code -eq 0 -and $r.Ink -gt 50) }
+foreach ($m in 'min_b64','min_ext','min_glb','min_mat','min_cube','tet_stl','tet_obj','tet_ply','tet_off') { $r = Snap @('--snapshot','-s',$m); Check "model $m" ($r.Code -eq 0 -and $r.Ink -gt 50) }
 foreach ($x in @('--shatter'), @('--menu')) { $r = Snap (@('--snapshot','-s','cube') + $x); Check "cube $x" ($r.Code -eq 0 -and $r.Ink -gt 50) }
 foreach ($l in 0..6) { $r = Snap @('--snapshot','-s','maus','--lod',"$l"); Check "maus lod $l" ($r.Code -eq 0 -and $r.Ink -gt 50) }
 $m = (& $exe --snapshot -s cube --menu 2>$null) -join "`n"; Check 'menu marks loaded model' ($m -match '\|>\*cube')

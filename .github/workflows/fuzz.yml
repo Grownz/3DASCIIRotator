@@ -12,8 +12,8 @@ jobs:
   fuzz:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Generate glTF/GLB/3MF seeds
+      - uses: actions/checkout@v7
+      - name: Generate glTF, GLB, 3MF and FBX seeds
         shell: pwsh
         run: python tools/gen_min_formats.py
       - name: Build fuzzers
@@ -24,7 +24,7 @@ jobs:
         run: tests/fuzz/run_fuzz.ps1 -Seconds ${{ github.event.inputs.seconds || 30 }}
       - name: Keep crashing inputs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-crashes
           path: build/fuzz/crash-*
