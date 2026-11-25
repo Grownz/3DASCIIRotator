@@ -2819,6 +2819,296 @@ static void settings_save(void) {
     WritePrivateProfileStringW(L"ascii3D", L"shape", w, g_ini_path);   /* a read-only folder just fails silently */
 }
 
+/* Render one webcam frame to stdout (--webcam --snapshot). */
+static int run_webcam_snapshot(HANDLE h_out, int is_console) {
+    int cols = 0, rows = 0;
+    char *grid = NULL;
+    char err[160];
+    int r;
+    cols = 100; rows = 40;
+    if (is_console) console_size(h_out, &cols, &rows);
+    if (!webcam_start(g_cam_index, err, sizeof(err))) {
+        fprintf(stderr, "webcam: %s\n", err);
+        webcam_global_shutdown();
+        return 1;
+    }
+    if (!webcam_wait(3000)) {
+        fprintf(stderr, "webcam: no frame received\n");
+        webcam_stop();
+        webcam_global_shutdown();
+        return 1;
+    }
+    grid = (char *)malloc((size_t)cols * rows);
+    if (!grid) { webcam_stop(); webcam_global_shutdown(); return 1; }
+    webcam_draw(grid, cols, rows);
+    for (r = 0; r < rows; ++r) {
+        fwrite(grid + (size_t)r * cols, 1, (size_t)cols, stdout);
+        fputc('\n', stdout);
+    }
+    free(grid);
+    webcam_stop();
+    webcam_global_shutdown();
+    return 0;
+}
+
+/* Write a full animation without an interactive session (--export gif|png). */
+static int run_headless_export(HANDLE h_out, int is_console) {
+    char *eg;
+    int ec = 100, er = 40, ok;
+    g_tilt = g_start_tilt;
+    g_angle = g_start_angle * (PI / 180.0);
+    eg = (char *)malloc((size_t)ec * er);
+    if (!eg) return 1;
+    ok = export_animation(h_out, is_console, eg, ec, er, g_export_fmt == 2);
+    fprintf(stderr, "%s\n", g_model_msg);
+    free(eg);
+    return ok ? 0 : 1;
+}
+
+/* Render one plain frame (optionally with menu / shatter) to stdout (--snapshot). */
+static int run_snapshot(HANDLE h_out, int is_console) {
+    int cols = 0, rows = 0;
+    char *grid = NULL;
+    cols = 100; rows = 40;
+    if (is_console) console_size(h_out, &cols, &rows);
+    g_tilt  = g_start_tilt;
+    g_angle = g_start_angle * (PI / 180.0);
+    grid = (char *)malloc((size_t)cols * rows);
+    if (!grid) return 1;
+    if (g_lod_arg >= 0 && g_mesh && g_mesh->src_tris) set_lod(g_mesh, g_lod_arg);
+    render_grid(grid, cols, rows);
+    if (g_model_msg[0]) { fprintf(stderr, "%s\n", g_model_msg); g_model_msg[0] = '\0'; }
+    if (g_menu_start) {
+        g_menu_open = 1;
+        g_menu_sel = g_item_index;
+        draw_menu(grid, cols, rows);
+    }
+    if (g_shatter) {
+        double t = 0.0;
+        shatter_seed(12345u);
+        shatter_spawn(grid, cols, rows);
+        while (t < g_sim) {
+            double step = 1.0 / 120.0;
+            if (t + step > g_sim) step = g_sim - t;
+            shatter_step(step);
+            t += step;
+        }
+        shatter_draw(grid, cols, rows);
+    }
+    {
+        int r;
+        for (r = 0; r < rows; ++r) {
+            fwrite(grid + (size_t)r * cols, 1, (size_t)cols, stdout);
+            fputc('\n', stdout);
+        }
+    }
+    free(grid);
+    shatter_free();
+    return 0;
+}
+
+/* Read and handle every pending console event: keys, mouse wheel and drag.
+ * angle_deg is the live spin angle (a drag changes it). */
+static void process_input(HANDLE h_in, HANDLE h_out, int is_console, char *grid,
+                          int cols, int rows, double *angle_deg) {
+    DWORD nev = 0;
+    if (GetNumberOfConsoleInputEvents(h_in, &nev) && nev > 0) {
+        INPUT_RECORD recs[64];
+        DWORD got = 0, i;
+        if (nev > 64) nev = 64;
+        if (ReadConsoleInputW(h_in, recs, nev, &got)) {
+            for (i = 0; i < got; ++i) {
+                INPUT_RECORD *r = &recs[i];
+                if (r->EventType == KEY_EVENT && r->Event.KeyEvent.bKeyDown) {
+                    WORD vk = r->Event.KeyEvent.wVirtualKeyCode;
+                    char ch = r->Event.KeyEvent.uChar.AsciiChar;
+                    if (g_help) { if (vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU) g_help = 0; }   /* any key closes it; a bare modifier must not (Shift+? would reopen) */
+                    else if (g_filter_edit) {                    /* typing into the list filter: it takes every key */
+                        unsigned char uc = (unsigned char)ch;
+                        if (vk == VK_ESCAPE) { g_filter_edit = 0; g_filter_len = 0; g_filter[0] = '\0'; }
+                        else if (vk == VK_RETURN) { g_filter_edit = 0; if (item_matches(g_menu_sel)) select_index(g_menu_sel); }
+                        else if (vk == VK_UP)   g_menu_sel = menu_step(g_menu_sel, -1);
+                        else if (vk == VK_DOWN) g_menu_sel = menu_step(g_menu_sel, 1);
+                        else if (vk == VK_BACK) { if (g_filter_len > 0) g_filter[--g_filter_len] = '\0'; }
+                        else if (uc >= 32 && uc < 127 && g_filter_len < (int)sizeof(g_filter) - 1) { g_filter[g_filter_len++] = (char)uc; g_filter[g_filter_len] = '\0'; }
+                        menu_fix_sel();
+                    }
+                    else if (vk == VK_F1 || ch == '?') g_help = 1;
+                    else if (ch == 'h') g_hud_on = !g_hud_on;
+                    else if (ch == 'H') { g_hud_mode = !g_hud_mode; g_hud_on = 1; }   /* Shift+H: full <-> compact */
+                    else if (!g_webcam && (ch == 't' || ch == 'T')) {
+                        g_ramp_sel = (g_ramp_sel + 1) % RAMP_PRESETS;
+                        ramp_rev_init();
+                        msg_setf("ramp: %s", RAMP_NAMES[g_ramp_sel]);
+                    }
+                    else if (ch == 'x' || ch == 'X') {
+                        g_hq = !g_hq;
+                        msg_setf(g_hq ? "quality: 2x2 edge supersampling" : "quality: one sample per cell");
+                    }
+                    else if (!g_webcam && (vk == VK_PAUSE || ch == 'k' || ch == 'K')) {
+                        g_paused = !g_paused;
+                        msg_setf(g_paused ? "paused" : "resumed");
+                    } else if (g_webcam) {
+                        if (vk == VK_ESCAPE || ch == 'q' || ch == 'Q') g_running = 0;
+                        else if (vk == VK_HOME) g_show_fps = !g_show_fps;
+                    } else if (g_menu_open) {
+                        if (vk == VK_TAB) {
+                            g_menu_open = 0;
+                            if (item_matches(g_menu_sel)) select_index(g_menu_sel);
+                            g_filter_len = 0; g_filter[0] = '\0';   /* the filter lasts for one visit */
+                        }
+                        else if (vk == VK_ESCAPE) g_running = 0;
+                        else if (ch == '/') g_filter_edit = 1;
+                        else if (ch == ',' || ch == '.') {      /* narrower / wider list panel */
+                            g_panel_pct += (ch == '.') ? 5 : -5;
+                            if (g_panel_pct < 15) g_panel_pct = 15;
+                            if (g_panel_pct > 60) g_panel_pct = 60;
+                            msg_setf("panel width: %d%%", g_panel_pct);
+                        }
+                        else if (vk == VK_UP)   g_menu_sel = menu_step(g_menu_sel, -1);
+                        else if (vk == VK_DOWN) g_menu_sel = menu_step(g_menu_sel, 1);
+                        else if (vk == VK_RETURN || vk == VK_SPACE) { if (item_matches(g_menu_sel)) select_index(g_menu_sel); }
+                        else if (ch == '+' || ch == '=' || ch == ']') { g_speed += SPEED_STEP; if (g_speed > MAX_SPEED) g_speed = MAX_SPEED; }
+                        else if (ch == '-' || ch == '_' || ch == '[') { g_speed -= SPEED_STEP; if (g_speed < MIN_SPEED) g_speed = MIN_SPEED; }
+                        else if (vk == VK_PRIOR) apply_lod(-1);
+                        else if (vk == VK_NEXT)  apply_lod(1);
+                        else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
+                        else if (ch == 'a' || ch == 'A') {
+                            g_up_axis = (g_up_axis + 1) % 3;
+                            model_rot_update();
+                            g_scale_mesh = NULL;
+                            g_scale_aspect = -1.0;
+                            msg_setf("axis: %s-up", g_up_axis == 0 ? "z" : (g_up_axis == 1 ? "y" : "x"));
+                        }
+                        else if (ch == 'c' || ch == 'C') g_color_focus = !g_color_focus;
+                        else if (vk == VK_DELETE) {   /* reset the focused slider to the factory colour */
+                            if (g_color_focus) { g_light_color = 15; g_light_sel = colors_index(g_light_color); }
+                            else               { g_fg_color = 7;     g_color_sel = colors_index(g_fg_color); }
+                            grad_build();             /* same as color_step(): refresh the shading ramp */
+                        }
+                        else if (vk == VK_LEFT)  { if (g_color_focus) color_step(&g_light_sel, &g_light_color, -1); else color_step(&g_color_sel, &g_fg_color, -1); }
+                        else if (vk == VK_RIGHT) { if (g_color_focus) color_step(&g_light_sel, &g_light_color,  1); else color_step(&g_color_sel, &g_fg_color,  1); }
+                        else if (ch == 'q' || ch == 'Q') g_running = 0;
+                        else if (ch == 'g' || ch == 'G') export_animation(h_out, is_console, grid, cols, rows, 0);
+                        else if (ch == 'p' || ch == 'P') export_animation(h_out, is_console, grid, cols, rows, 1);
+                        else if (ch == 'r' || ch == 'R') models_poll(1);
+                    } else {
+                        if (vk == VK_ESCAPE || ch == 'q' || ch == 'Q') g_running = 0;
+                        else if (vk == VK_TAB) { g_menu_open = 1; g_menu_sel = g_item_index; g_menu_scroll = 0; }
+                        else if (vk == VK_UP)   { g_tilt += TILT_STEP; if (g_tilt > MAX_TILT) g_tilt = MAX_TILT; }
+                        else if (vk == VK_DOWN) { g_tilt -= TILT_STEP; if (g_tilt < -MAX_TILT) g_tilt = -MAX_TILT; }
+                        else if (vk == VK_SPACE) select_index(g_item_index + ((r->Event.KeyEvent.dwControlKeyState & SHIFT_PRESSED) ? -1 : 1));
+                        else if (ch >= '1' && ch <= '9') { if (ch - '1' < g_item_count) select_index(ch - '1'); }   /* jump by list position */
+                        else if (vk == VK_RETURN) {
+                            if (grid && cols > 0) {
+                                if (!g_shattered) {
+                                    render_grid(grid, cols, rows);
+                                    shatter_spawn(grid, cols, rows);
+                                    g_shattered = 1;
+                                } else {
+                                    g_shattered = 0;
+                                }
+                            }
+                        } else if (ch == '+' || ch == '=' || ch == ']') { g_speed += SPEED_STEP; if (g_speed > MAX_SPEED) g_speed = MAX_SPEED; }
+                        else if (ch == '-' || ch == '_' || ch == '[') { g_speed -= SPEED_STEP; if (g_speed < MIN_SPEED) g_speed = MIN_SPEED; }
+                        else if (vk == VK_PRIOR) apply_lod(-1);
+                        else if (vk == VK_NEXT)  apply_lod(1);
+                        else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
+                        else if (ch == 'a' || ch == 'A') {
+                            g_up_axis = (g_up_axis + 1) % 3;
+                            model_rot_update();
+                            g_scale_mesh = NULL;
+                            g_scale_aspect = -1.0;
+                            msg_setf("axis: %s-up", g_up_axis == 0 ? "z" : (g_up_axis == 1 ? "y" : "x"));
+                        }
+                        else if (ch == 'g' || ch == 'G') export_animation(h_out, is_console, grid, cols, rows, 0);
+                        else if (ch == 'p' || ch == 'P') export_animation(h_out, is_console, grid, cols, rows, 1);
+                        else if (ch == 'r' || ch == 'R') models_poll(1);
+                    }
+                } else if (r->EventType == MOUSE_EVENT) {
+                    const MOUSE_EVENT_RECORD *me = &r->Event.MouseEvent;
+                    if (g_menu_open && me->dwEventFlags == MOUSE_WHEELED) {
+                        short d = (short)HIWORD(me->dwButtonState);
+                        if (d > 0) g_menu_sel = menu_step(g_menu_sel, -1);
+                        else if (d < 0) g_menu_sel = menu_step(g_menu_sel, 1);
+                    } else if (!(me->dwEventFlags & MOUSE_WHEELED)) {
+                        /* drag with the left button: horizontal = spin angle, vertical = tilt */
+                        int left = (me->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+                        int over_list = g_menu_open && g_menu_x0 >= 0 && me->dwMousePosition.X >= g_menu_x0;
+                        if (left && !over_list && !g_webcam && !g_shattered && !g_help && !g_filter_edit) {
+                            if (g_drag_on && (me->dwEventFlags & MOUSE_MOVED)) {
+                                (*angle_deg) += (me->dwMousePosition.X - g_drag_x) * DRAG_DEG;
+                                while ((*angle_deg) >= 360.0) (*angle_deg) -= 360.0;
+                                while ((*angle_deg) < 0.0)    (*angle_deg) += 360.0;
+                                g_tilt -= (me->dwMousePosition.Y - g_drag_y) * DRAG_DEG;
+                                if (g_tilt >  MAX_TILT) g_tilt =  MAX_TILT;
+                                if (g_tilt < -MAX_TILT) g_tilt = -MAX_TILT;
+                            }
+                            g_drag_on = 1; g_drag_x = me->dwMousePosition.X; g_drag_y = me->dwMousePosition.Y;
+                        } else g_drag_on = 0;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* Advance the animation by dt and draw one frame (shape or webcam, status line, list, help)
+ * into grid. angle_deg is the live spin angle. */
+static void update_frame(char *grid, int cols, int rows, double dt, double *angle_deg) {
+if (g_cc) memset(g_cc, -1, sizeof(short) * (size_t)cols * rows);
+if (g_webcam) {
+    if (!cellfg_ensure(cols * rows)) { free(g_cellfg); g_cellfg = NULL; g_cellfg_cap = 0; }
+    webcam_draw(grid, cols, rows);
+    if (!g_wcam_err_shown && webcam_error()) {
+        g_wcam_err_shown = 1;
+        msg_setf("webcam: capture stopped");
+    }
+} else if (!g_shattered) {
+    if (!g_paused) (*angle_deg) += g_speed * dt;
+    while ((*angle_deg) >= 360.0) (*angle_deg) -= 360.0;
+    g_angle = (*angle_deg) * (PI / 180.0);
+    render_grid(grid, cols, rows);
+} else {
+    if (!g_paused) shatter_step(dt);
+    shatter_draw(grid, cols, rows);
+}
+draw_hud(grid, cols, rows);
+if (g_menu_open && !g_webcam) draw_menu(grid, cols, rows);
+if (g_help) draw_help(grid, cols, rows); else g_help_w = 0;
+}
+
+/* Turn the character grid into one escape-sequence string (per-cell colour) and write it. */
+static void present_frame(HANDLE h_out, int is_console, char *out, const char *grid, int cols, int rows) {
+    char *o = out;
+    int r, c, cur = -2;
+    *o++ = '\x1b'; *o++ = '['; *o++ = 'H';
+    for (r = 0; r < rows; ++r) {
+        for (c = 0; c < cols; ++c) {
+            size_t idx = (size_t)r * cols + c;
+            int want;
+            if (g_cc && g_cc[idx] >= 0) want = g_cc[idx];
+            else if (is_ui_cell(r, c))  want = -1;
+            else if (g_cellfg)          want = g_cellfg[idx];
+            else {
+                int ri = g_ramp_rev[(unsigned char)grid[idx]];
+                want = (ri >= 0) ? g_grad[ri] : g_fg_color;
+            }
+            if (want != cur) {
+                if (want < 0) o += sprintf(o, "\x1b[39m");
+                else          o += sprintf(o, "\x1b[38;5;%dm", want);
+                cur = want;
+            }
+            *o++ = grid[idx];
+        }
+        if (cur != -1) { memcpy(o, "\x1b[39m", 5); o += 5; cur = -1; }
+        if (r < rows - 1) { *o++ = '\r'; *o++ = '\n'; }
+    }
+    *o = '\0';
+    write_all(h_out, is_console, out, (int)(o - out));
+
+}
+
 int main(int argc, char **argv) {
     HANDLE h_out, h_in;
     DWORD  orig_mode = 0, in_mode = 0;
@@ -2891,88 +3181,13 @@ int main(int argc, char **argv) {
     is_console = GetConsoleMode(h_out, &orig_mode) ? 1 : 0;
 
     /* ---- webcam snapshot: one frame to stdout --------------------------- */
-    if (g_webcam && g_snapshot) {
-        char err[160];
-        int r;
-        cols = 100; rows = 40;
-        if (is_console) console_size(h_out, &cols, &rows);
-        if (!webcam_start(g_cam_index, err, sizeof(err))) {
-            fprintf(stderr, "webcam: %s\n", err);
-            webcam_global_shutdown();
-            return 1;
-        }
-        if (!webcam_wait(3000)) {
-            fprintf(stderr, "webcam: no frame received\n");
-            webcam_stop();
-            webcam_global_shutdown();
-            return 1;
-        }
-        grid = (char *)malloc((size_t)cols * rows);
-        if (!grid) { webcam_stop(); webcam_global_shutdown(); return 1; }
-        webcam_draw(grid, cols, rows);
-        for (r = 0; r < rows; ++r) {
-            fwrite(grid + (size_t)r * cols, 1, (size_t)cols, stdout);
-            fputc('\n', stdout);
-        }
-        free(grid);
-        webcam_stop();
-        webcam_global_shutdown();
-        return 0;
-    }
+    if (g_webcam && g_snapshot) return run_webcam_snapshot(h_out, is_console);
 
     /* ---- headless export: --export gif|png ------------------------------- */
-    if (g_export_fmt) {
-        char *eg;
-        int ec = 100, er = 40, ok;
-        g_tilt = g_start_tilt;
-        g_angle = g_start_angle * (PI / 180.0);
-        eg = (char *)malloc((size_t)ec * er);
-        if (!eg) return 1;
-        ok = export_animation(h_out, is_console, eg, ec, er, g_export_fmt == 2);
-        fprintf(stderr, "%s\n", g_model_msg);
-        free(eg);
-        return ok ? 0 : 1;
-    }
+    if (g_export_fmt) return run_headless_export(h_out, is_console);
 
     /* ---- snapshot mode: one plain frame, no console required ------------- */
-    if (g_snapshot) {
-        cols = 100; rows = 40;
-        if (is_console) console_size(h_out, &cols, &rows);
-        g_tilt  = g_start_tilt;
-        g_angle = g_start_angle * (PI / 180.0);
-        grid = (char *)malloc((size_t)cols * rows);
-        if (!grid) return 1;
-        if (g_lod_arg >= 0 && g_mesh && g_mesh->src_tris) set_lod(g_mesh, g_lod_arg);
-        render_grid(grid, cols, rows);
-        if (g_model_msg[0]) { fprintf(stderr, "%s\n", g_model_msg); g_model_msg[0] = '\0'; }
-        if (g_menu_start) {
-            g_menu_open = 1;
-            g_menu_sel = g_item_index;
-            draw_menu(grid, cols, rows);
-        }
-        if (g_shatter) {
-            double t = 0.0;
-            shatter_seed(12345u);
-            shatter_spawn(grid, cols, rows);
-            while (t < g_sim) {
-                double step = 1.0 / 120.0;
-                if (t + step > g_sim) step = g_sim - t;
-                shatter_step(step);
-                t += step;
-            }
-            shatter_draw(grid, cols, rows);
-        }
-        {
-            int r;
-            for (r = 0; r < rows; ++r) {
-                fwrite(grid + (size_t)r * cols, 1, (size_t)cols, stdout);
-                fputc('\n', stdout);
-            }
-        }
-        free(grid);
-        shatter_free();
-        return 0;
-    }
+    if (g_snapshot) return run_snapshot(h_out, is_console);
 
     /* ---- interactive mode requires a real console ------------------------ */
     if (!is_console) {
@@ -3020,149 +3235,8 @@ int main(int argc, char **argv) {
 
         QueryPerformanceCounter(&frame_start);
 
-        /* --- input: keys + mouse wheel -------------------------------- */
-        {
-            DWORD nev = 0;
-            if (GetNumberOfConsoleInputEvents(h_in, &nev) && nev > 0) {
-                INPUT_RECORD recs[64];
-                DWORD got = 0, i;
-                if (nev > 64) nev = 64;
-                if (ReadConsoleInputW(h_in, recs, nev, &got)) {
-                    for (i = 0; i < got; ++i) {
-                        INPUT_RECORD *r = &recs[i];
-                        if (r->EventType == KEY_EVENT && r->Event.KeyEvent.bKeyDown) {
-                            WORD vk = r->Event.KeyEvent.wVirtualKeyCode;
-                            char ch = r->Event.KeyEvent.uChar.AsciiChar;
-                            if (g_help) { if (vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU) g_help = 0; }   /* any key closes it; a bare modifier must not (Shift+? would reopen) */
-                            else if (g_filter_edit) {                    /* typing into the list filter: it takes every key */
-                                unsigned char uc = (unsigned char)ch;
-                                if (vk == VK_ESCAPE) { g_filter_edit = 0; g_filter_len = 0; g_filter[0] = '\0'; }
-                                else if (vk == VK_RETURN) { g_filter_edit = 0; if (item_matches(g_menu_sel)) select_index(g_menu_sel); }
-                                else if (vk == VK_UP)   g_menu_sel = menu_step(g_menu_sel, -1);
-                                else if (vk == VK_DOWN) g_menu_sel = menu_step(g_menu_sel, 1);
-                                else if (vk == VK_BACK) { if (g_filter_len > 0) g_filter[--g_filter_len] = '\0'; }
-                                else if (uc >= 32 && uc < 127 && g_filter_len < (int)sizeof(g_filter) - 1) { g_filter[g_filter_len++] = (char)uc; g_filter[g_filter_len] = '\0'; }
-                                menu_fix_sel();
-                            }
-                            else if (vk == VK_F1 || ch == '?') g_help = 1;
-                            else if (ch == 'h') g_hud_on = !g_hud_on;
-                            else if (ch == 'H') { g_hud_mode = !g_hud_mode; g_hud_on = 1; }   /* Shift+H: full <-> compact */
-                            else if (!g_webcam && (ch == 't' || ch == 'T')) {
-                                g_ramp_sel = (g_ramp_sel + 1) % RAMP_PRESETS;
-                                ramp_rev_init();
-                                msg_setf("ramp: %s", RAMP_NAMES[g_ramp_sel]);
-                            }
-                            else if (ch == 'x' || ch == 'X') {
-                                g_hq = !g_hq;
-                                msg_setf(g_hq ? "quality: 2x2 edge supersampling" : "quality: one sample per cell");
-                            }
-                            else if (!g_webcam && (vk == VK_PAUSE || ch == 'k' || ch == 'K')) {
-                                g_paused = !g_paused;
-                                msg_setf(g_paused ? "paused" : "resumed");
-                            } else if (g_webcam) {
-                                if (vk == VK_ESCAPE || ch == 'q' || ch == 'Q') g_running = 0;
-                                else if (vk == VK_HOME) g_show_fps = !g_show_fps;
-                            } else if (g_menu_open) {
-                                if (vk == VK_TAB) {
-                                    g_menu_open = 0;
-                                    if (item_matches(g_menu_sel)) select_index(g_menu_sel);
-                                    g_filter_len = 0; g_filter[0] = '\0';   /* the filter lasts for one visit */
-                                }
-                                else if (vk == VK_ESCAPE) g_running = 0;
-                                else if (ch == '/') g_filter_edit = 1;
-                                else if (ch == ',' || ch == '.') {      /* narrower / wider list panel */
-                                    g_panel_pct += (ch == '.') ? 5 : -5;
-                                    if (g_panel_pct < 15) g_panel_pct = 15;
-                                    if (g_panel_pct > 60) g_panel_pct = 60;
-                                    msg_setf("panel width: %d%%", g_panel_pct);
-                                }
-                                else if (vk == VK_UP)   g_menu_sel = menu_step(g_menu_sel, -1);
-                                else if (vk == VK_DOWN) g_menu_sel = menu_step(g_menu_sel, 1);
-                                else if (vk == VK_RETURN || vk == VK_SPACE) { if (item_matches(g_menu_sel)) select_index(g_menu_sel); }
-                                else if (ch == '+' || ch == '=' || ch == ']') { g_speed += SPEED_STEP; if (g_speed > MAX_SPEED) g_speed = MAX_SPEED; }
-                                else if (ch == '-' || ch == '_' || ch == '[') { g_speed -= SPEED_STEP; if (g_speed < MIN_SPEED) g_speed = MIN_SPEED; }
-                                else if (vk == VK_PRIOR) apply_lod(-1);
-                                else if (vk == VK_NEXT)  apply_lod(1);
-                                else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
-                                else if (ch == 'a' || ch == 'A') {
-                                    g_up_axis = (g_up_axis + 1) % 3;
-                                    model_rot_update();
-                                    g_scale_mesh = NULL;
-                                    g_scale_aspect = -1.0;
-                                    msg_setf("axis: %s-up", g_up_axis == 0 ? "z" : (g_up_axis == 1 ? "y" : "x"));
-                                }
-                                else if (ch == 'c' || ch == 'C') g_color_focus = !g_color_focus;
-                                else if (vk == VK_DELETE) {   /* reset the focused slider to the factory colour */
-                                    if (g_color_focus) { g_light_color = 15; g_light_sel = colors_index(g_light_color); }
-                                    else               { g_fg_color = 7;     g_color_sel = colors_index(g_fg_color); }
-                                    grad_build();             /* same as color_step(): refresh the shading ramp */
-                                }
-                                else if (vk == VK_LEFT)  { if (g_color_focus) color_step(&g_light_sel, &g_light_color, -1); else color_step(&g_color_sel, &g_fg_color, -1); }
-                                else if (vk == VK_RIGHT) { if (g_color_focus) color_step(&g_light_sel, &g_light_color,  1); else color_step(&g_color_sel, &g_fg_color,  1); }
-                                else if (ch == 'q' || ch == 'Q') g_running = 0;
-                                else if (ch == 'g' || ch == 'G') export_animation(h_out, is_console, grid, cols, rows, 0);
-                                else if (ch == 'p' || ch == 'P') export_animation(h_out, is_console, grid, cols, rows, 1);
-                                else if (ch == 'r' || ch == 'R') models_poll(1);
-                            } else {
-                                if (vk == VK_ESCAPE || ch == 'q' || ch == 'Q') g_running = 0;
-                                else if (vk == VK_TAB) { g_menu_open = 1; g_menu_sel = g_item_index; g_menu_scroll = 0; }
-                                else if (vk == VK_UP)   { g_tilt += TILT_STEP; if (g_tilt > MAX_TILT) g_tilt = MAX_TILT; }
-                                else if (vk == VK_DOWN) { g_tilt -= TILT_STEP; if (g_tilt < -MAX_TILT) g_tilt = -MAX_TILT; }
-                                else if (vk == VK_SPACE) select_index(g_item_index + ((r->Event.KeyEvent.dwControlKeyState & SHIFT_PRESSED) ? -1 : 1));
-                                else if (ch >= '1' && ch <= '9') { if (ch - '1' < g_item_count) select_index(ch - '1'); }   /* jump by list position */
-                                else if (vk == VK_RETURN) {
-                                    if (grid && cols > 0) {
-                                        if (!g_shattered) {
-                                            render_grid(grid, cols, rows);
-                                            shatter_spawn(grid, cols, rows);
-                                            g_shattered = 1;
-                                        } else {
-                                            g_shattered = 0;
-                                        }
-                                    }
-                                } else if (ch == '+' || ch == '=' || ch == ']') { g_speed += SPEED_STEP; if (g_speed > MAX_SPEED) g_speed = MAX_SPEED; }
-                                else if (ch == '-' || ch == '_' || ch == '[') { g_speed -= SPEED_STEP; if (g_speed < MIN_SPEED) g_speed = MIN_SPEED; }
-                                else if (vk == VK_PRIOR) apply_lod(-1);
-                                else if (vk == VK_NEXT)  apply_lod(1);
-                                else if (vk == VK_HOME)  g_show_fps = !g_show_fps;
-                                else if (ch == 'a' || ch == 'A') {
-                                    g_up_axis = (g_up_axis + 1) % 3;
-                                    model_rot_update();
-                                    g_scale_mesh = NULL;
-                                    g_scale_aspect = -1.0;
-                                    msg_setf("axis: %s-up", g_up_axis == 0 ? "z" : (g_up_axis == 1 ? "y" : "x"));
-                                }
-                                else if (ch == 'g' || ch == 'G') export_animation(h_out, is_console, grid, cols, rows, 0);
-                                else if (ch == 'p' || ch == 'P') export_animation(h_out, is_console, grid, cols, rows, 1);
-                                else if (ch == 'r' || ch == 'R') models_poll(1);
-                            }
-                        } else if (r->EventType == MOUSE_EVENT) {
-                            const MOUSE_EVENT_RECORD *me = &r->Event.MouseEvent;
-                            if (g_menu_open && me->dwEventFlags == MOUSE_WHEELED) {
-                                short d = (short)HIWORD(me->dwButtonState);
-                                if (d > 0) g_menu_sel = menu_step(g_menu_sel, -1);
-                                else if (d < 0) g_menu_sel = menu_step(g_menu_sel, 1);
-                            } else if (!(me->dwEventFlags & MOUSE_WHEELED)) {
-                                /* drag with the left button: horizontal = spin angle, vertical = tilt */
-                                int left = (me->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
-                                int over_list = g_menu_open && g_menu_x0 >= 0 && me->dwMousePosition.X >= g_menu_x0;
-                                if (left && !over_list && !g_webcam && !g_shattered && !g_help && !g_filter_edit) {
-                                    if (g_drag_on && (me->dwEventFlags & MOUSE_MOVED)) {
-                                        angle_deg += (me->dwMousePosition.X - g_drag_x) * DRAG_DEG;
-                                        while (angle_deg >= 360.0) angle_deg -= 360.0;
-                                        while (angle_deg < 0.0)    angle_deg += 360.0;
-                                        g_tilt -= (me->dwMousePosition.Y - g_drag_y) * DRAG_DEG;
-                                        if (g_tilt >  MAX_TILT) g_tilt =  MAX_TILT;
-                                        if (g_tilt < -MAX_TILT) g_tilt = -MAX_TILT;
-                                    }
-                                    g_drag_on = 1; g_drag_x = me->dwMousePosition.X; g_drag_y = me->dwMousePosition.Y;
-                                } else g_drag_on = 0;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        /* --- input: keys + mouse -------------------------------------- */
+        process_input(h_in, h_out, is_console, grid, cols, rows, &angle_deg);
         if (!g_running) break;
 
         /* --- console size (may change on resize) ---------------------- */
@@ -3215,56 +3289,10 @@ int main(int argc, char **argv) {
         if (scan_acc >= 1.0) { scan_acc = 0.0; models_poll(0); }
 
         /* --- update + render ------------------------------------------ */
-        if (g_cc) memset(g_cc, -1, sizeof(short) * (size_t)cols * rows);
-        if (g_webcam) {
-            if (!cellfg_ensure(cols * rows)) { free(g_cellfg); g_cellfg = NULL; g_cellfg_cap = 0; }
-            webcam_draw(grid, cols, rows);
-            if (!g_wcam_err_shown && webcam_error()) {
-                g_wcam_err_shown = 1;
-                msg_setf("webcam: capture stopped");
-            }
-        } else if (!g_shattered) {
-            if (!g_paused) angle_deg += g_speed * dt;
-            while (angle_deg >= 360.0) angle_deg -= 360.0;
-            g_angle = angle_deg * (PI / 180.0);
-            render_grid(grid, cols, rows);
-        } else {
-            if (!g_paused) shatter_step(dt);
-            shatter_draw(grid, cols, rows);
-        }
-        draw_hud(grid, cols, rows);
-        if (g_menu_open && !g_webcam) draw_menu(grid, cols, rows);
-        if (g_help) draw_help(grid, cols, rows); else g_help_w = 0;
+        update_frame(grid, cols, rows, dt, &angle_deg);
 
         /* --- present (per-cell colour) -------------------------------- */
-        {
-            char *o = out;
-            int r, c, cur = -2;
-            *o++ = '\x1b'; *o++ = '['; *o++ = 'H';
-            for (r = 0; r < rows; ++r) {
-                for (c = 0; c < cols; ++c) {
-                    size_t idx = (size_t)r * cols + c;
-                    int want;
-                    if (g_cc && g_cc[idx] >= 0) want = g_cc[idx];
-                    else if (is_ui_cell(r, c))  want = -1;
-                    else if (g_cellfg)          want = g_cellfg[idx];
-                    else {
-                        int ri = g_ramp_rev[(unsigned char)grid[idx]];
-                        want = (ri >= 0) ? g_grad[ri] : g_fg_color;
-                    }
-                    if (want != cur) {
-                        if (want < 0) o += sprintf(o, "\x1b[39m");
-                        else          o += sprintf(o, "\x1b[38;5;%dm", want);
-                        cur = want;
-                    }
-                    *o++ = grid[idx];
-                }
-                if (cur != -1) { memcpy(o, "\x1b[39m", 5); o += 5; cur = -1; }
-                if (r < rows - 1) { *o++ = '\r'; *o++ = '\n'; }
-            }
-            *o = '\0';
-            write_all(h_out, is_console, out, (int)(o - out));
-        }
+        present_frame(h_out, is_console, out, grid, cols, rows);
 
         /* --- frame limiter: only sleep if we are ahead of the target ----- */
         if (g_target_fps > 0) {

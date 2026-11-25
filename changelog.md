@@ -43,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   smoke tests and the FBX fuzz seeds; the workflows use `actions/checkout@v7`
   and `actions/upload-artifact@v7`.
 
+### Internal
+- `main.c` is smaller: the shatter effect moved to `shatter.c`/`shatter.h`, and
+  `main()` (about 405 lines before) is split into `run_snapshot`,
+  `run_headless_export`, `run_webcam_snapshot`, `process_input`, `update_frame`
+  and `present_frame`. Snapshots, GIF/PNG exports and the benchmark checksum
+  are byte-identical to the build before the split.
+
 ## [3.2.0] - 2026-11-25
 
 ### Changed
