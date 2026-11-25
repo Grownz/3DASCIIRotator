@@ -19,6 +19,14 @@ typedef struct {
  * message to err. */
 int loader_load(const wchar_t *path, int max_tris, RawMesh *out, char *err, int errsz);
 
+/* Parse an in-memory file. ext is the extension including the dot (".obj"...),
+ * path is only used to resolve sidecar files (.mtl, external glTF buffers).
+ * b must hold n bytes plus one NUL byte at b[n] and may be modified. Same
+ * result convention as loader_load, which this is split out of (also the
+ * entry point of the fuzz harness in tests/fuzz). */
+int loader_load_buf(unsigned char *b, size_t n, const wchar_t *ext, const wchar_t *path,
+                    int max_tris, RawMesh *out, char *err, int errsz);
+
 /* Copies a short message into err (always NUL-terminated). */
 void seterr(char *e, int n, const char *m);
 

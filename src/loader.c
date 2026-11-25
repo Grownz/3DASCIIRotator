@@ -538,16 +538,11 @@ static int parse_ply(const unsigned char *b, size_t n, int max_tris,
 }
 
 /* --------------------------------------------------------------- dispatch */
-int loader_load(const wchar_t *path, int max_tris, RawMesh *out, char *err, int errsz) {
-    const wchar_t *ext = wcsrchr(path, L'.');
-    unsigned char *b;
-    size_t n = 0;
+int loader_load_buf(unsigned char *b, size_t n, const wchar_t *ext, const wchar_t *path,
+                    int max_tris, RawMesh *out, char *err, int errsz) {
     int ok = 0;
 
     out->verts = NULL; out->tris = NULL; out->face_rgb = NULL; out->nvert = out->ntri = 0;
-    if (!ext) { seterr(err, errsz, "no extension"); return 0; }
-    b = read_file(path, &n, err, errsz);
-    if (!b) return 0;
 
     if (_wcsicmp(ext, L".stl") == 0)       ok = parse_stl(b, n, max_tris, out, err, errsz);
     else if (_wcsicmp(ext, L".obj") == 0)  ok = parse_obj(b, n, max_tris, path, out, err, errsz);
@@ -559,7 +554,21 @@ int loader_load(const wchar_t *path, int max_tris, RawMesh *out, char *err, int 
     else if (_wcsicmp(ext, L".fbx") == 0)  ok = fbx_load(b, n, max_tris, out, err, errsz);
     else seterr(err, errsz, "unsupported format");
 
-    free(b);
     if (!ok) { free(out->verts); free(out->tris); free(out->face_rgb); out->verts = NULL; out->tris = NULL; out->face_rgb = NULL; }
+    return ok;
+}
+
+int loader_load(const wchar_t *path, int max_tris, RawMesh *out, char *err, int errsz) {
+    const wchar_t *ext = wcsrchr(path, L'.');
+    unsigned char *b;
+    size_t n = 0;
+    int ok;
+
+    out->verts = NULL; out->tris = NULL; out->face_rgb = NULL; out->nvert = out->ntri = 0;
+    if (!ext) { seterr(err, errsz, "no extension"); return 0; }
+    b = read_file(path, &n, err, errsz);
+    if (!b) return 0;
+    ok = loader_load_buf(b, n, ext, path, max_tris, out, err, errsz);
+    free(b);
     return ok;
 }

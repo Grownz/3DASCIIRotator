@@ -1,0 +1,30 @@
+name: fuzz
+# libFuzzer + AddressSanitizer on every model loader, 30 s per format per run.
+# This is a short smoke fuzz, not a long campaign: it catches shallow bugs and regressions.
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds per format
+        default: '30'
+jobs:
+  fuzz:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate glTF/GLB/3MF seeds
+        shell: pwsh
+        run: python tools/gen_min_formats.py
+      - name: Build fuzzers
+        shell: cmd
+        run: tests\fuzz\build_fuzz.bat
+      - name: Fuzz
+        shell: pwsh
+        run: tests/fuzz/run_fuzz.ps1 -Seconds ${{ github.event.inputs.seconds || 30 }}
+      - name: Keep crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: build/fuzz/crash-*

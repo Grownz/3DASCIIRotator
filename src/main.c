@@ -2225,7 +2225,7 @@ static void print_help(void) {
         "  q                    Quit\n\n"
         "Interactive runs remember the shape, speed, tilt, colours and FPS\n"
         "readout in ascii3D.ini next to the executable; command-line options win.\n"
-        "Delete the file to reset. Snapshots, exports and --bench ignore it.\n\n"
+        "Delete the file to reset. Snapshots, exports, --bench and --webcam ignore it.\n\n"
         "Drop .stl/.obj/.ply/.off/.gltf/.glb/.3mf/.fbx files into the 'models'\n"
         "folder next to this executable; they are detected automatically and\n"
         "added to the cycle. OBJ files may use an .mtl for per-material colours.\n",
@@ -2847,12 +2847,12 @@ static void settings_save(void) {
     int i;
     if (!g_ini_path[0]) return;
     _snwprintf(w, 64, L"%d", (int)(g_speed + 0.5));  w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"speed", w, g_ini_path);
-    _snwprintf(w, 64, L"%d", (int)g_tilt);           w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"tilt", w, g_ini_path);
+    _snwprintf(w, 64, L"%d", (int)(g_tilt < 0 ? g_tilt - 0.5 : g_tilt + 0.5)); w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"tilt", w, g_ini_path);
     _snwprintf(w, 64, L"%d", g_fg_color);            w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"mesh", w, g_ini_path);
     _snwprintf(w, 64, L"%d", g_light_color);         w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"light", w, g_ini_path);
     _snwprintf(w, 64, L"%d", g_show_fps ? 1 : 0);    w[63] = 0; WritePrivateProfileStringW(L"ascii3D", L"fps", w, g_ini_path);
     for (i = 0; g_shape_name_buf[i] && i < 63; ++i) {
-        if ((unsigned char)g_shape_name_buf[i] < 32 || (unsigned char)g_shape_name_buf[i] > 126) return;   /* skip non-ASCII names */
+        if ((unsigned char)g_shape_name_buf[i] < 32 || (unsigned char)g_shape_name_buf[i] > 126) { i = 0; break; }   /* non-ASCII: save no shape */
         w[i] = (wchar_t)g_shape_name_buf[i];
     }
     w[i] = 0;

@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `ascii3D.ini` next to the exe (command-line options win; snapshots, exports,
   `--bench` and `--webcam` ignore it).
 - `--filter` is ignored outside `--snapshot`.
+- Fuzzing: a libFuzzer + AddressSanitizer harness for all eight loaders
+  (`tests/fuzz`, built with `build_fuzz.bat`, run with `run_fuzz.ps1`) and a
+  `fuzz` workflow that fuzzes each format for 30 s per push. `loader_load` is
+  split into `loader_load` (file) and `loader_load_buf` (memory) for it.
+- `tests/interactive.ps1` drives the real program with injected keys (local).
 
 ## [3.2.0] - 2026-11-25
 

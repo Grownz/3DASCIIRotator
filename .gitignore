@@ -16,3 +16,6 @@ tools/models/
 .vs/
 .vscode/
 *.user
+
+# fuzz seeds are small hand-made fixtures (*.obj is otherwise ignored)
+!tests/fuzz/corpus/**
